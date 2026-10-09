@@ -15,14 +15,105 @@ npm run dev
 
 初始化示例：`node scripts/seed-obsidian.mjs` 会从本机 Obsidian 的 2026-09 和 2026-10 记录导入演示数据。该命令会追加条目，若要重置本地演示数据，可先删除 `data/rafa.sqlite` 和 `data/uploads` 后再运行。
 
-## 生产部署
+## 阿里云生产部署
+
+下面以 Ubuntu 22.04/24.04、Docker Compose 和一个已经解析到服务器的域名为例。2 核 2 GB 可以运行；应用只绑定服务器本机的 `3001` 端口，公网访问交给 Nginx。
+
+### 1. 安装依赖并拉代码
 
 ```sh
-APP_PASSWORD='替换为强密码' docker compose up -d --build
+sudo apt update
+sudo apt install -y git ca-certificates curl nginx
+curl -fsSL https://get.docker.com | sudo sh
+sudo systemctl enable --now docker
+sudo usermod -aG docker "$USER"
 ```
 
-应用监听本机 3001，通过 Nginx/Caddy 配置 HTTPS 反向代理。单用户使用浏览器原生登录框，用户名任意，密码使用 APP_PASSWORD。不要将开发服务直接公开。
+重新登录 SSH 后确认 Docker 可用：
 
-2核2GB服务器可运行；建议本地构建镜像后上传服务器，降低构建内存需求。`data` 必须持久化，升级不删除它。
+```sh
+docker --version
+docker compose version
+git clone <你的仓库地址> RafaTodo
+cd RafaTodo
+```
 
-备份需使用 SQLite backup API，或停止应用后复制整个 `data` 目录（含图片和可能存在的 WAL 文件）。恢复时停止服务，替换目录，再启动。页面导出 JSON 包含条目元数据，不包含图片二进制。
+如果仓库是私有仓库，先在服务器配置 SSH key，再使用 SSH 地址 clone。
+
+### 2. 设置登录密码并启动
+
+密码通过 `.env` 注入容器，不要把它提交到 Git：
+
+```sh
+printf 'APP_PASSWORD=%s\n' "$(openssl rand -hex 24)" > .env
+chmod 600 .env
+docker compose up -d --build
+docker compose ps
+curl -I http://127.0.0.1:3001
+```
+
+打开 `http://服务器IP:3001` 只能用于本机排查；正式使用应继续配置 HTTPS。浏览器弹出原生登录框时，用户名可以填写任意值，密码就是 `.env` 中的 `APP_PASSWORD`。
+
+### 3. 用 Nginx 暴露域名
+
+将下面内容保存为 `/etc/nginx/sites-available/rafatodo`，把域名替换成自己的域名：
+
+```nginx
+server {
+    listen 80;
+    server_name todo.example.com;
+    client_max_body_size 12m;
+
+    location / {
+        proxy_pass http://127.0.0.1:3001;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+启用配置并申请 HTTPS 证书：
+
+```sh
+sudo ln -s /etc/nginx/sites-available/rafatodo /etc/nginx/sites-enabled/rafatodo
+sudo nginx -t && sudo systemctl reload nginx
+sudo apt install -y certbot python3-certbot-nginx
+sudo certbot --nginx -d todo.example.com
+```
+
+阿里云安全组只需要放行 `80`、`443` 和 SSH；不需要放行 `3001`。域名 DNS 的 A 记录指向服务器公网 IP。
+
+### 4. 更新版本
+
+```sh
+cd RafaTodo
+git pull --ff-only
+docker compose up -d --build
+docker compose logs --tail=100 rafatodo
+```
+
+`./data` 是宿主机目录，会挂载到容器的 `/data`，重建容器不会删除任务和图片。不要使用 `docker compose down -v`，否则会删除挂载卷。
+
+### 5. 备份和恢复
+
+SQLite 使用 WAL，备份前短暂停止服务最稳妥：
+
+```sh
+cd RafaTodo
+docker compose stop
+tar -czf "rafatodo-data-$(date +%F).tgz" data
+docker compose start
+```
+
+恢复时停止服务，将备份解压覆盖 `data` 后再启动：
+
+```sh
+docker compose stop
+tar -xzf rafatodo-data-2026-10-09.tgz
+docker compose start
+```
+
+页面中的 JSON 导出只包含条目和元数据，不包含图片二进制；完整备份必须包含整个 `data/uploads` 目录。查看故障时使用 `docker compose logs -f rafatodo`。
