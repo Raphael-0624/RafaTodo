@@ -14,12 +14,13 @@ const titleOf=item=>item.title||item.content||item.url||'图片';
 function App(){
   const [items,setItems]=useState([]),[draft,setDraft]=useState(null),[text,setText]=useState('');
   const [busy,setBusy]=useState(false),[loading,setLoading]=useState(true),[error,setError]=useState('');
+  const [authenticated,setAuthenticated]=useState(null),[password,setPassword]=useState(''),[loggingIn,setLoggingIn]=useState(false);
   const [drop,setDrop]=useState(null),[dragging,setDragging]=useState(''),[hint,setHint]=useState(null),[choice,setChoice]=useState(0);
   const textarea=useRef(null),drag=useRef(null),currentDrop=useRef(null),suppressClick=useRef(false);
   const saving=useRef(null);
   const itemsRef=useRef(items);itemsRef.current=items;
   const draftRef=useRef(null);draftRef.current=draft;
-  useEffect(()=>{api('/api/entries').then(setItems).catch(e=>setError(e.message)).finally(()=>setLoading(false));},[]);
+  useEffect(()=>{api('/api/auth/status').then(status=>{setAuthenticated(status.authenticated);if(status.authenticated)api('/api/entries').then(setItems).catch(e=>setError(e.message));}).catch(e=>setError(e.message)).finally(()=>setLoading(false));},[]);
   useEffect(()=>{
     if(!textarea.current)return;
     textarea.current.style.height='0px';textarea.current.style.height=Math.max(25,textarea.current.scrollHeight)+'px';
@@ -32,6 +33,8 @@ function App(){
     return ()=>document.removeEventListener('pointerdown',commit);
   },[draft,text,busy]);
   function replaceItem(saved){setItems(previous=>previous.some(item=>item.id===saved.id)?previous.map(item=>item.id===saved.id?saved:item):[...previous,saved]);}
+  async function login(event){event.preventDefault();if(!password.trim()||loggingIn)return;setLoggingIn(true);setError('');try{await api('/api/auth/login','POST',{password});setPassword('');setAuthenticated(true);setItems(await api('/api/entries'));}catch(e){setError(e.message);}finally{setLoggingIn(false);}}
+  async function logout(){await api('/api/auth/logout','POST').catch(()=>{});setAuthenticated(false);setItems([]);close();}
   function close(){setDraft(null);setText('');setHint(null);}
   async function save(closeAfter=true){
     if(saving.current)return saving.current;
@@ -205,8 +208,10 @@ function App(){
     const link=document.createElement('a'),url=URL.createObjectURL(new Blob([JSON.stringify(items,null,2)],{type:'application/json'}));
     link.href=url;link.download='rafatodo.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
   }
+  if(authenticated===null||loading)return <div className="auth-screen"><div className="auth-mark">rafa<span>todo</span><i/></div><span className="auth-loading">正在打开…</span></div>;
+  if(!authenticated)return <div className="auth-screen"><form className="auth-form" onSubmit={login}><div className="auth-mark">rafa<span>todo</span><i/></div><label htmlFor="password">输入密码</label><div className="auth-input"><input id="password" type="password" autoFocus autoComplete="current-password" value={password} onChange={event=>setPassword(event.target.value)} placeholder="••••••"/><button type="submit" disabled={loggingIn||!password}>{loggingIn?'…':'进入'}</button></div>{error&&<p className="auth-error">{error}</p>}</form></div>;
   return <div className="app">
-    <header className="topbar"><a className="brand" href="/" aria-label="RafaTodo 首页">rafa<span>todo</span><i/></a><button className="export" onClick={exportAll} aria-label="导出全部条目" title="导出 JSON"><DownloadSimple size={18}/></button></header>
+    <header className="topbar"><a className="brand" href="/" aria-label="RafaTodo 首页">rafa<span>todo</span><i/></a><div className="top-actions"><button className="export" onClick={exportAll} aria-label="导出全部条目" title="导出 JSON"><DownloadSimple size={18}/></button><button className="logout" onClick={logout}>退出</button></div></header>
     {error&&<div className="global-error" role="alert">{error}</div>}
     <main className="board">{domains.map(domain=><section className={'column '+(drop?.domain===domain&&drop.placement==='end'?'drop-column':'')} key={domain} data-domain={domain} aria-label={domain}
       onDragOver={event=>{if(event.dataTransfer.types.includes('Files'))event.preventDefault();}}
