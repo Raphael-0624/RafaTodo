@@ -1,0 +1,26 @@
+{
+  "name": "rafatodo",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "dev": "concurrently -k \"node --watch server.js\" \"vite\"",
+    "build": "vite build",
+    "start": "node server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "@phosphor-icons/react": "^2.1.10",
+    "express": "^5.2.1",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^6.1.2",
+    "concurrently": "^10.0.6",
+    "vite": "^8.3.4"
+  }
+}
