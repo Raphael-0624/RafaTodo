@@ -1,6 +1,6 @@
 import React,{useState,useEffect,useLayoutEffect,useRef} from 'react';
 import {createRoot} from 'react-dom/client';
-import {Plus,ArrowUpRight,Check,TextT,LinkSimple,ImageSquare,DotsSixVertical,X,Trash,ArrowCounterClockwise,CaretDown,CaretRight} from '@phosphor-icons/react';
+import {Plus,ArrowUpRight,Check,TextT,LinkSimple,ImageSquare,DotsSixVertical,X,Trash,ArrowCounterClockwise,CaretDown,CaretRight,ChartBar} from '@phosphor-icons/react';
 import {domains,parseLine,toLine,treeRows,pasteLink} from './lib/entries.js';
 import './style.css';
 
@@ -16,6 +16,23 @@ const editLine=(item,entries)=>toLine(item,entries,{hideTaskPrefix:true});
 const prefersReducedMotion=()=>window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 const clamp=value=>Math.min(75,Math.max(25,value));
 function readLayout(){try{const value=JSON.parse(localStorage.getItem('rafa-layout'));return {work:clamp(Number(value?.work)||50),life:clamp(Number(value?.life)||50)};}catch{return {work:50,life:50};}}
+const dayKey=value=>{const date=new Date(value);return Number.isNaN(date.getTime())?'':date.toLocaleDateString('en-CA');};
+function Heatmap({items,open,onClose}){
+  const [domain,setDomain]=useState(''),[activity,setActivity]=useState([]),[selected,setSelected]=useState('');
+  useEffect(()=>{if(!open)return;const end=new Date(),start=new Date(end);start.setDate(end.getDate()-181);api('/api/activity?from='+dayKey(start)+'&to='+dayKey(end)+(domain?'&domain='+encodeURIComponent(domain):'')).then(setActivity).catch(()=>setActivity([]));},[open,domain]);
+  if(!open)return null;
+  const end=new Date(),start=new Date(end);start.setDate(end.getDate()-181);start.setDate(start.getDate()-start.getDay());
+  const cells=Array.from({length:27*7},(_,index)=>{const date=new Date(start);date.setDate(start.getDate()+index);return dayKey(date);});
+  const map=new Map(activity.map(row=>[row.date,row]));
+  const selectedItems=selected?items.filter(item=>item.domain&&(domain?item.domain===domain:true)&&[item.createdAt,item.updatedAt,item.completedAt,item.removedAt].some(value=>dayKey(value)===selected)).slice(0,12):[];
+  return <div className="heatmap-popover" role="dialog" aria-label="活动热力图" onPointerDown={event=>event.stopPropagation()}>
+    <div className="heatmap-head"><strong>活动热力图</strong><button onClick={onClose} aria-label="关闭热力图">×</button></div>
+    <div className="heatmap-filters"><button className={!domain?'active':''} onClick={()=>{setDomain('');setSelected('');}}>全部</button>{domains.map(value=><button key={value} className={domain===value?'active':''} onClick={()=>{setDomain(value);setSelected('');}}>{value==='Glean & Idea'?'GLEAN & IDEA':value.toUpperCase()}</button>)}</div>
+    <div className="heatmap-grid" aria-label="最近六个月活动"><div className="heatmap-weekdays"><span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span></div><div className="heatmap-cells">{cells.map((date,index)=>{const row=map.get(date),total=row?row.created+row.completed+row.updated+row.removed:0,level=total?Math.min(4,Math.ceil(total/3)):0;return <button key={date+'-'+index} className={'heat-cell level-'+level+(selected===date?' selected':'')} title={`${date} · ${total} 次活动`} aria-label={`${date}，${total} 次活动`} onClick={()=>setSelected(date)}/>})}</div></div>
+    <div className="heatmap-legend"><span>少</span><i className="level-0"/><i className="level-1"/><i className="level-2"/><i className="level-3"/><i className="level-4"/><span>多</span></div>
+    {selected&&<div className="heatmap-detail"><div className="heatmap-detail-head"><strong>{selected}</strong><span>{(()=>{const row=map.get(selected);return row?`新增 ${row.created} · 完成 ${row.completed} · 更新 ${row.updated}`:'无活动';})()}</span></div>{selectedItems.length?<div className="heatmap-items">{selectedItems.map(item=><button key={item.id} onClick={()=>{onClose();document.querySelector(`[data-entry-id="${item.id}"]`)?.scrollIntoView({behavior:'smooth',block:'center'});}}>{titleOf(item)}</button>)}</div>:<span className="heatmap-empty">当天没有可回顾的条目</span>}</div>}
+  </div>;
+}
 function App(){
   const [items,setItems]=useState([]),[draft,setDraft]=useState(null),[text,setText]=useState('');
   const [busy,setBusy]=useState(false),[loading,setLoading]=useState(true),[error,setError]=useState('');
@@ -24,6 +41,7 @@ function App(){
   const textarea=useRef(null),drag=useRef(null),currentDrop=useRef(null),suppressClick=useRef(false);
   const saving=useRef(null);
   const [picker,setPicker]=useState('');
+  const [heatmapOpen,setHeatmapOpen]=useState(false);
 
   const [layout,setLayout]=useState(readLayout);
   const board=useRef(null),beforePositions=useRef(null);
@@ -59,7 +77,7 @@ function App(){
     document.addEventListener('pointerdown',commit);
     return ()=>document.removeEventListener('pointerdown',commit);
   },[draft,text,busy]);
-  useEffect(()=>{const closeTransient=event=>{setMenu(null);if(!event.target.closest('.row-actions'))setConfirmDelete('');};document.addEventListener('pointerdown',closeTransient);return()=>document.removeEventListener('pointerdown',closeTransient);},[]);
+  useEffect(()=>{const closeTransient=event=>{setMenu(null);if(!event.target.closest('.row-actions'))setConfirmDelete('');if(!event.target.closest('.heatmap-trigger,.heatmap-popover'))setHeatmapOpen(false);};document.addEventListener('pointerdown',closeTransient);return()=>document.removeEventListener('pointerdown',closeTransient);},[]);
   function replaceItem(saved){applyItems(itemsRef.current.some(item=>item.id===saved.id)?itemsRef.current.map(item=>item.id===saved.id?saved:item):[...itemsRef.current,saved]);}
   async function login(event){event.preventDefault();if(!password.trim()||loggingIn)return;setLoggingIn(true);setError('');try{await api('/api/auth/login','POST',{password});setPassword('');setAuthenticated(true);setItems(await api('/api/entries'));}catch(e){setError(e.message);}finally{setLoggingIn(false);}}
   function close(){setDraft(null);setText('');setHint(null);}
@@ -287,7 +305,7 @@ function App(){
   if(authenticated===null||loading)return <div className="auth-screen"><div className="auth-brand"><img className="auth-cat" src="/rafa-cat.png" alt=""/><div className="auth-mark">Rafa<span>todo</span><i/></div></div><span className="auth-loading">正在打开…</span></div>;
   if(!authenticated)return <div className="auth-screen"><form className="auth-form" onSubmit={login}><div className="auth-brand"><img className="auth-cat" src="/rafa-cat.png" alt=""/><div className="auth-mark">Rafa<span>todo</span><i/></div></div><div className="auth-input"><input id="password" type="password" autoFocus autoComplete="current-password" value={password} onChange={event=>setPassword(event.target.value)} aria-label="密码" placeholder="••••••" onKeyDown={event=>{if(event.key==='Enter')login(event);}}/></div>{error&&<p className="auth-error">{error}</p>}</form></div>;
   return <div className="app">
-    <header className="topbar"><a className="brand" href="/" aria-label="RafaTodo 首页"><img className="brand-cat" src="/rafa-cat.png" alt=""/>Rafa<span>todo</span><i/></a></header>
+    <header className="topbar"><a className="brand" href="/" aria-label="RafaTodo 首页"><img className="brand-cat" src="/rafa-cat.png" alt=""/>Rafa<span>todo</span><i/></a><button className={'heatmap-trigger '+(heatmapOpen?'active':'')} onClick={()=>setHeatmapOpen(value=>!value)} aria-label="打开活动热力图" title="活动热力图"><ChartBar size={18}/></button><Heatmap items={items} open={heatmapOpen} onClose={()=>setHeatmapOpen(false)}/></header>
     {error&&<div className="global-error" role="alert">{error}</div>}
     <main ref={board} className="board" style={{'--work':layout.work+'%','--life':layout.life+'%'}}>{domains.map(domain=><section className={'column '+(drop?.domain===domain&&drop.placement==='end'?'drop-column':'')} key={domain} data-domain={domain} aria-label={domain}
       onDragOver={event=>{if(event.dataTransfer.types.includes('Files'))event.preventDefault();}}
