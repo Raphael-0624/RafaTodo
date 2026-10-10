@@ -99,3 +99,35 @@ button:focus-visible,a:focus-visible,textarea:focus-visible{outline:2px solid #4
 .write-mark{margin-top:2px}
 @media(max-width:720px){.divider{display:none}.column:nth-child(1){border-right:0}.entry-title{line-height:20px}.row-actions{opacity:.55;pointer-events:auto}}
 @media(hover:none){.row-actions{opacity:.55;pointer-events:auto}}
+/* Headers stay outside each scrolling list; watermarks stay behind the content. */
+.column{display:flex;flex-direction:column;overflow:hidden;padding-bottom:0;isolation:isolate}
+.column-head{flex:0 0 auto;position:relative;z-index:2;background:#fcfcfa}
+.column-scroll{flex:1;min-height:0;overflow:auto;position:relative;z-index:1;margin:0 -20px;padding:0 20px 35px;scrollbar-width:thin;scrollbar-color:#d5dcd0 transparent;overscroll-behavior:contain}
+.column-watermark{position:absolute;inset:65px 0 0;z-index:0;pointer-events:none;user-select:none;overflow:hidden;display:flex;flex-direction:column;align-items:flex-end;justify-content:flex-end;padding:0 18px 12px;font-size:clamp(80px,16vw,240px);line-height:.8;letter-spacing:-.075em;font-weight:800;color:#364932;opacity:.045}
+.column:nth-child(3) .column-watermark{font-size:clamp(50px,9vw,150px);line-height:.9}
+.column-watermark span{font-size:.8em}
+.status-caption{display:block;color:#8c9885;font-size:9px;line-height:15px;font-variant-numeric:tabular-nums;animation:status-enter 160ms ease-out}
+.is-removed .entry-read{opacity:1}
+.is-removed .entry-title,.is-removed .entry-note,.is-removed .entry-meta{opacity:.5}
+.is-removed .checkbox{color:#9da694}
+.entry button:disabled{opacity:1;cursor:pointer}
+.entry-read,.checkbox,.entry-title,.entry-meta,.drag-handle,.row-actions,.row-actions button,.open-link,.add-row>button{transition:background-color 140ms ease,color 160ms ease,border-color 160ms ease,opacity 140ms ease}
+.entry-read:active{background:#eaf0e5}
+.checkbox:active,.row-actions button:active{transform:scale(.9)}
+.checkbox{transition:background-color 160ms ease,border-color 160ms ease,transform 100ms ease}
+.checkbox.checked svg{animation:check-enter 160ms ease-out}
+.drag-source{opacity:.45}
+.drag-source>.entry-read{background:#eef3e8;box-shadow:0 3px 12px #30402a0d}
+.drop-inside>.entry-read{transition:background-color 120ms ease}
+.write-input textarea{transition:border-color 140ms ease}
+.write-input textarea:focus{border-color:#438865}
+@keyframes check-enter{from{opacity:0;transform:scale(.65)}to{opacity:1;transform:scale(1)}}
+@keyframes status-enter{from{opacity:0;transform:translateY(-2px)}to{opacity:1;transform:translateY(0)}}
+@media(max-width:720px){
+  .column{display:block;overflow:visible;padding-bottom:25px}
+  .column-head{position:sticky;top:0;padding-top:12px;margin-top:-12px}
+  .column-scroll{overflow:visible;padding-bottom:0}
+  .column-watermark{font-size:28vw;padding-bottom:18px}
+  .column:nth-child(3) .column-watermark{font-size:19vw}
+}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}

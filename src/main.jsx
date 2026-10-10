@@ -1,4 +1,4 @@
-import React,{useState,useEffect,useRef} from 'react';
+import React,{useState,useEffect,useLayoutEffect,useRef} from 'react';
 import {createRoot} from 'react-dom/client';
 import {Plus,ArrowUpRight,Check,TextT,LinkSimple,ImageSquare,DotsSixVertical,DownloadSimple,X,Trash,ArrowCounterClockwise} from '@phosphor-icons/react';
 import {domains,parseLine,toLine,treeRows} from './lib/entries.js';
@@ -12,6 +12,7 @@ async function api(url,method='GET',body){
 }
 const titleOf=item=>item.title||item.content||item.url||'图片';
 const editLine=(item,entries)=>toLine(item,entries,{hideTaskPrefix:true});
+const prefersReducedMotion=()=>window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 const clamp=value=>Math.min(75,Math.max(25,value));
 function readLayout(){try{const value=JSON.parse(localStorage.getItem('rafa-layout'));return {work:clamp(Number(value?.work)||50),life:clamp(Number(value?.life)||50)};}catch{return {work:50,life:50};}}
 function App(){
@@ -22,7 +23,24 @@ function App(){
   const textarea=useRef(null),drag=useRef(null),currentDrop=useRef(null),suppressClick=useRef(false);
   const saving=useRef(null);
   const [layout,setLayout]=useState(readLayout);
-  const board=useRef(null);
+  const board=useRef(null),beforePositions=useRef(null);
+  useLayoutEffect(()=>{
+    const previous=beforePositions.current;beforePositions.current=null;
+    if(!previous||prefersReducedMotion())return;
+    for(const node of board.current?.querySelectorAll('[data-entry-id]')||[]){
+      const old=previous.get(node.dataset.entryId);if(!old)continue;
+      const rect=node.getBoundingClientRect(),x=old.left-rect.left,y=old.top-rect.top;
+      if(Math.abs(x)+Math.abs(y)>1)node.animate([{transform:`translate(${x}px,${y}px)`},{transform:'translate(0,0)'}],{duration:220,easing:'cubic-bezier(.2,.8,.2,1)'});
+    }
+  },[items]);
+  function applyItems(next){
+    beforePositions.current=new Map([...board.current?.querySelectorAll('[data-entry-id]')||[]].map(node=>[node.dataset.entryId,node.getBoundingClientRect()]));
+    setItems(previous=>{const old=new Map(previous.map(item=>[item.id,item]));return next.map(item=>JSON.stringify(old.get(item.id))===JSON.stringify(item)?old.get(item.id):item);});
+  }
+  function feedback(id){
+    if(prefersReducedMotion())return;
+    requestAnimationFrame(()=>{const node=[...board.current?.querySelectorAll('[data-entry-id]')||[]].find(node=>node.dataset.entryId===id)?.querySelector('.entry-read');node?.animate([{backgroundColor:'#eaf1e4'},{backgroundColor:'transparent'}],{duration:360,easing:'ease-out'});});
+  }
   useEffect(()=>{try{localStorage.setItem('rafa-layout',JSON.stringify(layout));}catch{}},[layout]);
   const itemsRef=useRef(items);itemsRef.current=items;
   const draftRef=useRef(null);draftRef.current=draft;
@@ -38,7 +56,7 @@ function App(){
     document.addEventListener('pointerdown',commit);
     return ()=>document.removeEventListener('pointerdown',commit);
   },[draft,text,busy]);
-  function replaceItem(saved){setItems(previous=>previous.some(item=>item.id===saved.id)?previous.map(item=>item.id===saved.id?saved:item):[...previous,saved]);}
+  function replaceItem(saved){applyItems(itemsRef.current.some(item=>item.id===saved.id)?itemsRef.current.map(item=>item.id===saved.id?saved:item):[...itemsRef.current,saved]);}
   async function login(event){event.preventDefault();if(!password.trim()||loggingIn)return;setLoggingIn(true);setError('');try{await api('/api/auth/login','POST',{password});setPassword('');setAuthenticated(true);setItems(await api('/api/entries'));}catch(e){setError(e.message);}finally{setLoggingIn(false);}}
   async function logout(){await api('/api/auth/logout','POST').catch(()=>{});setAuthenticated(false);setItems([]);close();}
   function close(){setDraft(null);setText('');setHint(null);}
@@ -70,14 +88,19 @@ function App(){
     if(busy&&!saving.current)return;
     if(draft){const saved=await save();if(!saved)return;if(saved.id===item.id)item=saved;}
     setBusy(true);setError('');
-    try{replaceItem(await api('/api/entries/'+item.id,'PUT',{...item,status}));}catch(e){setError(e.message);}finally{setBusy(false);}
+    try{replaceItem(await api('/api/entries/'+item.id,'PUT',{...item,status}));feedback(item.id);}catch(e){setError(e.message);}finally{setBusy(false);}
   }
   async function deleteItem(item){
     if(busy)return;
     if(!window.confirm('永久删除“'+titleOf(item)+'”？子条目会保留。'))return;
     if(draft?.id===item.id)close();else if(draft&&!await save())return;
     setBusy(true);setError('');
-    try{setItems(await api('/api/entries/'+item.id,'DELETE'));}catch(e){setError(e.message);}finally{setBusy(false);}
+    try{
+      const next=await api('/api/entries/'+item.id,'DELETE');
+      const node=[...board.current?.querySelectorAll('[data-entry-id]')||[]].find(node=>node.dataset.entryId===item.id);
+      if(node&&!prefersReducedMotion())await node.animate([{opacity:1,transform:'translateX(0)'},{opacity:0,transform:'translateX(8px)'}],{duration:140,easing:'ease-in',fill:'forwards'}).finished.catch(()=>{});
+      applyItems(next);
+    }catch(e){setError(e.message);}finally{setBusy(false);}
   }
   function resize(event,axis){
     if(event.button!==0)return;
@@ -91,7 +114,7 @@ function App(){
   function divider(axis){return <div className={'divider divider-'+axis} role="separator" tabIndex={0} aria-label={axis==='work'?'调整 WORK 宽度':'调整 LIFE 高度'} aria-orientation={axis==='work'?'vertical':'horizontal'} aria-valuemin={25} aria-valuemax={75} aria-valuenow={Math.round(layout[axis])} onPointerDown={event=>resize(event,axis)} onKeyDown={event=>{if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home'].includes(event.key)){event.preventDefault();setLayout(previous=>({...previous,[axis]:event.key==='Home'?50:clamp(previous[axis]+(['ArrowLeft','ArrowUp'].includes(event.key)?-2:2))}));}}}/>;}
   async function move(spec){
     setBusy(true);setError('');
-    try{setItems(await api('/api/entries/move','POST',spec));}catch(e){setError(e.message);}finally{setBusy(false);}
+    try{applyItems(await api('/api/entries/move','POST',spec));feedback(spec.id);}catch(e){setError(e.message);}finally{setBusy(false);}
   }
   function beginDrag(event,item){
     if(event.button!==0||busy)return;
@@ -118,7 +141,7 @@ function App(){
         }else next={id:item.id,domain,placement:'end'};
       }
       currentDrop.current=next;setDrop(next);
-      if(column){const box=column.getBoundingClientRect();if(event.clientY<box.top+45)column.scrollBy(0,-12);if(event.clientY>box.bottom-45)column.scrollBy(0,12);}
+      if(column){const scroller=column.querySelector('.column-scroll'),box=scroller?.getBoundingClientRect();if(box){if(event.clientY<box.top+45)scroller.scrollBy(0,-12);if(event.clientY>box.bottom-45)scroller.scrollBy(0,12);}}
     }
     async function finish(){
       const spec=currentDrop.current;
@@ -198,6 +221,8 @@ function App(){
     const editing=draft?.id===item.id,done=item.status==='done',removed=item.status==='removed';
     const target=drop?.targetId===item.id?drop.placement:'';
     const overdue=item.type==='todo'&&item.dueDate&&item.dueDate<new Date().toLocaleDateString('en-CA')&&!done&&!removed;
+    const statusDate=(removed?item.removedAt:done?item.completedAt:null);
+    const statusCaption=statusDate?new Date(statusDate).toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'})+(removed?'取消':'完成'):'';
     const timeTitle=[['createdAt','创建'],['updatedAt','更新'],['completedAt','完成'],['removedAt','移除']].filter(([key])=>item[key]).map(([key,name])=>name+'：'+new Date(item[key]).toLocaleString('zh-CN',{hour12:false})).join('\n');
     return <div key={item.id} className={'entry '+(done?'is-done ':'')+(removed?'is-removed ':'')+(dragging===item.id?'drag-source ':'')+(target?'drop-'+target:'')} data-entry-id={item.id} data-depth={depth} style={{'--depth':depth}}>
       <button className="drag-handle" title="拖动排序；放在文字中间成为子条目" aria-label={'拖动 '+titleOf(item)} onPointerDown={event=>beginDrag(event,item)}><DotsSixVertical size={14}/></button>
@@ -219,8 +244,8 @@ function App(){
             {Object.entries(item.custom||{}).filter(([,value])=>value).map(([key,value])=><span key={key}>{key} · {value}</span>)}
             {(item.dependencies||[]).map(id=><span key={id} className="relation">← {items.find(entry=>entry.id===id)?.title||'前置任务'}</span>)}
             {(item.related||[]).map(id=><span key={id} className="relation">↔ {items.find(entry=>entry.id===id)?.title||'关联条目'}</span>)}
-            {removed&&<span>已移除</span>}
           </span>
+          {statusCaption&&<span className="status-caption">{statusCaption}</span>}
         </button>
         <div className="row-actions">
           <button title={removed?'恢复条目':'取消条目'} aria-label={removed?'恢复条目':'取消条目'} disabled={busy} onClick={()=>updateStatus(item,removed?'open':'removed')}>{removed?<ArrowCounterClockwise size={14}/>:<X size={14}/>}</button>
@@ -242,9 +267,12 @@ function App(){
     <main ref={board} className="board" style={{'--work':layout.work+'%','--life':layout.life+'%'}}>{domains.map(domain=><section className={'column '+(drop?.domain===domain&&drop.placement==='end'?'drop-column':'')} key={domain} data-domain={domain} aria-label={domain}
       onDragOver={event=>{if(event.dataTransfer.types.includes('Files'))event.preventDefault();}}
       onDrop={event=>{const file=Array.from(event.dataTransfer.files).find(file=>file.type.startsWith('image/'));if(file){event.preventDefault();upload(file,domain);}}}>
+      <div className="column-watermark" aria-hidden="true">{domain==='Glean & Idea'?<>GLEAN<span>& IDEA</span></>:domain.toUpperCase()}</div>
       <div className="column-head"><h1>{domain.toUpperCase()}</h1><span>{items.filter(item=>item.domain===domain&&item.type==='todo'&&!['done','removed'].includes(item.status)).length}</span></div>
+      <div className="column-scroll">
       <div className="column-content">{loading?<div className="loading">加载中…</div>:treeRows(items,domain).map(({item,depth})=>row(item,depth))}</div>
       <div className="add-row">{draft&&!draft.id&&draft.domain===domain?editor():<button onClick={()=>open(null,domain)} aria-label={'在 '+domain+' 新增条目'}><Plus size={14}/><span>写一条…</span></button>}</div>
+      </div>
     </section>)}{divider('work')}{divider('life')}</main>
     {dragging&&<div className="drag-caption">{drop?.placement==='inside'?'成为子条目':drop?.placement==='end'?'移到 '+drop.domain+' 末尾':drop?'移动到这里':'拖到目标位置'}</div>}
   </div>;
