@@ -1,7 +1,7 @@
 import React,{useState,useEffect,useLayoutEffect,useRef} from 'react';
 import {createRoot} from 'react-dom/client';
 import {Plus,ArrowUpRight,Check,TextT,LinkSimple,ImageSquare,DotsSixVertical,DownloadSimple,X,Trash,ArrowCounterClockwise,CaretDown,CaretRight} from '@phosphor-icons/react';
-import {domains,parseLine,toLine,treeRows} from './lib/entries.js';
+import {domains,parseLine,toLine,treeRows,pasteLink} from './lib/entries.js';
 import './style.css';
 
 async function api(url,method='GET',body){
@@ -11,7 +11,7 @@ async function api(url,method='GET',body){
   return data;
 }
 const titleOf=item=>item.title||item.content||item.url||'图片';
-function inline(value){return String(value).split(/(`[^`]+`|==[^=]+==|\*\*[^*]+\*\*|~~[^~]+~~|\*[^*]+\*)/g).map((part,index)=>{if(part.startsWith('`'))return <code key={index}>{part.slice(1,-1)}</code>;if(part.startsWith('=='))return <mark key={index}>{part.slice(2,-2)}</mark>;if(part.startsWith('**'))return <strong key={index}>{part.slice(2,-2)}</strong>;if(part.startsWith('~~'))return <del key={index}>{part.slice(2,-2)}</del>;if(part.startsWith('*'))return <em key={index}>{part.slice(1,-1)}</em>;return part;});}
+function inline(value){return String(value).split(/(`[^`]+`|!?\[[^\]]+\]\(https?:\/\/[^\s)]+\)|==[^=]+==|\*\*[^*]+\*\*|~~[^~]+~~|\*[^*]+\*)/g).map((part,index)=>{const link=part.match(/^\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)$/);if(link)return <a key={index} className="markdown-link" href={link[2]} target="_blank" rel="noreferrer" onClick={event=>event.stopPropagation()}>{link[1]}<ArrowUpRight size={11}/></a>;if(part.startsWith('`'))return <code key={index}>{part.slice(1,-1)}</code>;if(part.startsWith('=='))return <mark key={index}>{part.slice(2,-2)}</mark>;if(part.startsWith('**'))return <strong key={index}>{part.slice(2,-2)}</strong>;if(part.startsWith('~~'))return <del key={index}>{part.slice(2,-2)}</del>;if(part.startsWith('*'))return <em key={index}>{part.slice(1,-1)}</em>;return part;});}
 const editLine=(item,entries)=>toLine(item,entries,{hideTaskPrefix:true});
 const prefersReducedMotion=()=>window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 const clamp=value=>Math.min(75,Math.max(25,value));
@@ -20,7 +20,7 @@ function App(){
   const [items,setItems]=useState([]),[draft,setDraft]=useState(null),[text,setText]=useState('');
   const [busy,setBusy]=useState(false),[loading,setLoading]=useState(true),[error,setError]=useState('');
   const [authenticated,setAuthenticated]=useState(null),[password,setPassword]=useState(''),[loggingIn,setLoggingIn]=useState(false);
-  const [drop,setDrop]=useState(null),[dragging,setDragging]=useState(''),[hint,setHint]=useState(null),[choice,setChoice]=useState(0);
+  const [drop,setDrop]=useState(null),[dragging,setDragging]=useState(''),[hint,setHint]=useState(null),[choice,setChoice]=useState(0),[menu,setMenu]=useState(null);
   const textarea=useRef(null),drag=useRef(null),currentDrop=useRef(null),suppressClick=useRef(false);
   const saving=useRef(null);
   const [picker,setPicker]=useState('');
@@ -59,6 +59,7 @@ function App(){
     document.addEventListener('pointerdown',commit);
     return ()=>document.removeEventListener('pointerdown',commit);
   },[draft,text,busy]);
+  useEffect(()=>{const closeMenu=()=>setMenu(null);document.addEventListener('pointerdown',closeMenu);return()=>document.removeEventListener('pointerdown',closeMenu);},[]);
   function replaceItem(saved){applyItems(itemsRef.current.some(item=>item.id===saved.id)?itemsRef.current.map(item=>item.id===saved.id?saved:item):[...itemsRef.current,saved]);}
   async function login(event){event.preventDefault();if(!password.trim()||loggingIn)return;setLoggingIn(true);setError('');try{await api('/api/auth/login','POST',{password});setPassword('');setAuthenticated(true);setItems(await api('/api/entries'));}catch(e){setError(e.message);}finally{setLoggingIn(false);}}
   async function logout(){await api('/api/auth/logout','POST').catch(()=>{});setAuthenticated(false);setItems([]);close();}
@@ -70,10 +71,11 @@ function App(){
     if(draft.id&&text===editLine(draft,items)){if(closeAfter)close();return draft;}
     setBusy(true);setError('');
     const operation=(async()=>{try{
-      const value=parseLine(text,draft,items);
+      const value=parseLine(text,draft,items);delete value.insert;
       if(value.type!=='divider'&&!value.title&&!value.content&&!value.image&&!value.url){close();return true;}
       const saved=await api('/api/entries'+(value.id?'/'+value.id:''),value.id?'PUT':'POST',value);
       replaceItem(saved);
+      if(!value.id&&draft.insert){await move({id:saved.id,targetId:draft.insert.targetId,domain:saved.domain,placement:draft.insert.placement});}
       if(closeAfter)close();else{setDraft(saved);setText(editLine(saved,items));}
       return saved;
     }catch(e){setError(e.message);return false;}finally{setBusy(false);}})();
@@ -87,6 +89,7 @@ function App(){
     const value=item||{domain,title:'',content:'',type:'todo',status:'open',parentId,position:Math.max(-1,...items.filter(entry=>entry.domain===domain&&(entry.parentId||'')===parentId).map(entry=>entry.position??0))+1};
     setDraft(value);setText(item?editLine(item,items):'');setHint(null);setError('');
   }
+  async function insertNear(item,placement,type){setMenu(null);if(draft&&!await save())return;const prefix=type==='group'?'## ':type==='text'?'> ':'';setDraft({domain:item.domain,type,status:'open',title:'',content:'',parentId:item.parentId||'',position:item.position??0,insert:{targetId:item.id,placement}});setText(prefix);setHint(null);requestAnimationFrame(()=>{textarea.current?.focus();textarea.current?.setSelectionRange(prefix.length,prefix.length);});}
   async function updateStatus(item,status=item.status==='done'?'open':'done'){
     if(busy&&!saving.current)return;
     if(draft){const saved=await save();if(!saved)return;if(saved.id===item.id)item=saved;}
@@ -139,6 +142,8 @@ function App(){
       let next=null;
       if(column){
         const domain=column.dataset.domain;
+        const groupBlock=node?.closest('.group-block');
+        if(!row&&groupBlock){const groupRow=groupBlock.querySelector('[data-entry-id]');if(groupRow)next={id:item.id,targetId:groupRow.dataset.entryId,domain,placement:'inside'};}
         if(row){
           const box=row.getBoundingClientRect(),portion=(event.clientY-box.top)/box.height;
           const target=itemsRef.current.find(entry=>entry.id===row.dataset.entryId);
@@ -147,7 +152,7 @@ function App(){
             const placement=portion>.25&&portion<.75&&event.clientX>box.left+indent+55?'inside':portion<.5?'before':'after';
             next={id:item.id,targetId:target.id,domain,placement};
           }
-        }else next={id:item.id,domain,placement:'end'};
+        }else if(!next)next={id:item.id,domain,placement:'end'};
       }
       currentDrop.current=next;setDrop(next);
       if(column){const scroller=column.querySelector('.column-scroll'),box=scroller?.getBoundingClientRect();if(box){if(event.clientY<box.top+45)scroller.scrollBy(0,-12);if(event.clientY>box.bottom-45)scroller.scrollBy(0,12);}}
@@ -213,9 +218,10 @@ function App(){
       <span className={'write-mark '+(preview.type==='todo'?'task-mark':'')}>{preview.type==='text'?<TextT size={15}/>:preview.type==='link'?<LinkSimple size={15}/>:preview.type==='image'?<ImageSquare size={15}/>:null}</span>
       <div className="write-input">
         <textarea ref={textarea} autoFocus rows="1" aria-label="直接编辑条目" placeholder="写一条…" value={text} disabled={busy} onChange={event=>{setText(event.target.value);suggest(event.target.value,event.target.selectionStart);}} onClick={event=>suggest(text,event.target.selectionStart)}
-          onPaste={event=>{const file=Array.from(event.clipboardData.files).find(file=>file.type.startsWith('image/'));if(file){event.preventDefault();upload(file,draft.domain);}}}
+          onPaste={event=>{const file=Array.from(event.clipboardData.files).find(file=>file.type.startsWith('image/'));if(file){event.preventDefault();upload(file,draft.domain);return;}const result=pasteLink(text,event.target.selectionStart,event.target.selectionEnd,event.clipboardData.getData('text/plain'));if(result){event.preventDefault();setText(result.text);requestAnimationFrame(()=>{textarea.current?.focus();textarea.current?.setSelectionRange(result.caret,result.caret);});}}}
           onKeyDown={event=>{
             if(event.nativeEvent.isComposing||event.keyCode===229)return;
+            if((event.metaKey||event.ctrlKey)&&['b','i','='].includes(event.key.toLowerCase())){event.preventDefault();const marker=event.key.toLowerCase()==='b'?'**':event.key.toLowerCase()==='i'?'*':'==';const start=event.target.selectionStart,end=event.target.selectionEnd;setText(text.slice(0,start)+marker+text.slice(start,end)+marker+text.slice(end));requestAnimationFrame(()=>{textarea.current?.focus();textarea.current?.setSelectionRange(start+marker.length,end+marker.length);});return;}
             if(event.key==='Escape'){event.preventDefault();if(hint)setHint(null);else close();return;}
             if(hint&&['ArrowDown','ArrowUp'].includes(event.key)){event.preventDefault();setChoice(previous=>(previous+(event.key==='ArrowDown'?1:-1)+hint.options.length)%hint.options.length);return;}
             if(hint&&(event.key==='Tab'||event.key==='Enter')){event.preventDefault();complete(hint.options[choice]);return;}
@@ -235,11 +241,11 @@ function App(){
     const statusDate=(removed?item.removedAt:done?item.completedAt:null);
     const statusCaption=statusDate?new Date(statusDate).toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'})+(removed?'取消':'完成'):'';
     const timeTitle=[['createdAt','创建'],['updatedAt','更新'],['completedAt','完成'],['removedAt','移除']].filter(([key])=>item[key]).map(([key,name])=>name+'：'+new Date(item[key]).toLocaleString('zh-CN',{hour12:false})).join('\n');
-    return <div key={item.id} className={'entry '+(done?'is-done ':'')+(removed?'is-removed ':'')+(group?'is-group ':'')+(divider?'is-divider ':'')+(dragging===item.id?'drag-source ':'')+(target?'drop-'+target:'')} data-entry-id={item.id} data-depth={depth} style={{'--depth':depth}}>
+    return <div key={item.id} className={'entry '+(done?'is-done ':'')+(removed?'is-removed ':'')+(group?'is-group ':'')+(divider?'is-divider ':'')+(item.url?'has-link ':'')+(dragging===item.id?'drag-source ':'')+(target?'drop-'+target:'')} data-entry-id={item.id} data-depth={depth} style={{'--depth':depth}} onContextMenu={event=>{if(event.target.closest('textarea'))return;event.preventDefault();setMenu({x:event.clientX,y:event.clientY,item});}}>
       <button className="drag-handle" title="拖动排序；放在文字中间成为子条目" aria-label={'拖动 '+titleOf(item)} onPointerDown={event=>beginDrag(event,item)}><DotsSixVertical size={14}/></button>
       {editing?editor():<div className="entry-read">
         {group?<button className={'group-toggle '+(item.collapsed?'collapsed':'')} aria-label={item.collapsed?'展开分组':'收起分组'} aria-expanded={!item.collapsed} onClick={()=>configureGroup(item,{collapsed:!item.collapsed})}><CaretDown size={15}/></button>:divider?<span className="kind-mark">—</span>:item.type==='todo'?<button className={'checkbox '+(done?'checked':'')} aria-label={done?'重新打开任务':'完成任务'} onClick={()=>updateStatus(item)} disabled={busy}>{done&&<Check size={11} weight="bold"/>}{removed&&<span>−</span>}</button>:<span className="kind-mark">{item.type==='text'?<TextT size={15}/>:item.type==='link'?<LinkSimple size={15}/>:item.type==='bullet'?<span>•</span>:<ImageSquare size={15}/>}</span>}
-        <button className="entry-body" title={timeTitle} onClick={()=>open(item)} aria-label={'编辑 '+titleOf(item)}>
+        <div className={'entry-body '+(item.url?'linked-body':'')} title={timeTitle} role="button" tabIndex={0} onClick={event=>{if(event.target.closest('a'))return;if(item.url)window.open(item.url,'_blank','noopener,noreferrer');else open(item);}} onKeyDown={event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();if(item.url)window.open(item.url,'_blank','noopener,noreferrer');else open(item);}}} aria-label={item.url?'打开 '+titleOf(item):'编辑 '+titleOf(item)}>
           <span className="entry-title">{divider?<span className="md-rule"/>:inline(titleOf(item))}</span>
           {item.content&&item.title&&<span className="entry-note">{item.content.split('\n').map((line,index)=><span className="note-line" key={index}>{inline(line)}</span>)}</span>}
           {item.image&&<img className="thumb" src={item.image} alt={item.title||'条目图片'}/>}
@@ -257,7 +263,7 @@ function App(){
             {(item.related||[]).map(id=><span key={id} className="relation">↔ {items.find(entry=>entry.id===id)?.title||'关联条目'}</span>)}
           </span>
           {statusCaption&&<span className="status-caption">{statusCaption}</span>}
-        </button>
+        </div>
         {group&&<div className="group-controls"><button className="signature" title="选择分组图标和底色" onClick={()=>setPicker(picker===item.id?'':item.id)}>{item.signature||'◦'}</button><span className="group-count" title="已完成 / 总任务数（不含取消）">{tasks.filter(task=>task.status==='done').length}/{tasks.length}</span><button title="在分组内写一条" aria-label="在分组内新增条目" onClick={()=>open(null,item.domain,item.id)}><Plus size={14}/></button>
           {picker===item.id&&<div className="group-picker"><div>{['◦','📌','📝','🚀','💡','🌿','🏠','💼'].map(signature=><button key={signature} aria-label={'图标 '+signature} onClick={()=>{configureGroup(item,{signature});setPicker('');}}>{signature}</button>)}</div><div>{['sage','sand','blue','rose','none'].map(tone=><button className={'tone-swatch tone-'+tone} key={tone} aria-label={'底色 '+tone} onClick={()=>{configureGroup(item,{tone});setPicker('');}}/>)}</div></div>}
         </div>}
@@ -265,16 +271,16 @@ function App(){
           <button title={removed?'恢复条目':'取消条目'} aria-label={removed?'恢复条目':'取消条目'} disabled={busy} onClick={()=>updateStatus(item,removed?'open':'removed')}>{removed?<ArrowCounterClockwise size={14}/>:<X size={14}/>}</button>
           <button title="永久删除" aria-label="永久删除条目" disabled={busy} onClick={()=>deleteItem(item)}><Trash size={14}/></button>
         </div>
-        {item.url&&<a className="open-link" href={item.url} target="_blank" rel="noreferrer" aria-label="打开链接" title="打开链接"><ArrowUpRight size={15}/></a>}
       </div>}
     </div>;
   }
   function renderTree(domain){
     const rows=treeRows(items,domain);
     function renderBranch(parentId='',level=0){return rows.filter(({item})=>(item.parentId||'')===parentId||!parentId&&item.parentId&&!items.some(entry=>entry.id===item.parentId&&entry.domain===domain)).map(({item})=>{
-      const children=renderBranch(item.id,level+1);
-      if(item.type==='group')return <div key={item.id} className={'group-block tone-'+(['sage','sand','blue','rose','none'].includes(item.tone)?item.tone:'sage')} style={{marginLeft:level?18:0}}>{row(item,0)}{!item.collapsed&&<div className="group-children">{children}{draft&&!draft.id&&draft.parentId===item.id&&editor()}</div>}</div>;
-      return <React.Fragment key={item.id}>{row(item,level)}{children}</React.Fragment>;
+      const children=renderBranch(item.id,item.type==='group'?0:level+1);
+      const insertion=draft&&!draft.id&&draft.insert?.targetId===item.id?editor():null;
+      if(item.type==='group')return <React.Fragment key={item.id}>{draft?.insert?.placement==='before'&&insertion}<div className={'group-block tone-'+(['sage','sand','blue','rose','none'].includes(item.tone)?item.tone:'sage')} style={{marginLeft:level?18:0}}>{row(item,0)}{!item.collapsed&&<div className="group-children">{children}{draft&&!draft.id&&!draft.insert&&draft.parentId===item.id&&editor()}</div>}</div>{draft?.insert?.placement==='after'&&insertion}</React.Fragment>;
+      return <React.Fragment key={item.id}>{draft?.insert?.placement==='before'&&insertion}{row(item,level)}{children}{draft&&!draft.id&&!draft.insert&&draft.parentId===item.id&&editor()}{draft?.insert?.placement==='after'&&insertion}</React.Fragment>;
     });}
     return renderBranch();
   }
@@ -282,10 +288,10 @@ function App(){
     const link=document.createElement('a'),url=URL.createObjectURL(new Blob([JSON.stringify(items,null,2)],{type:'application/json'}));
     link.href=url;link.download='rafatodo.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
   }
-  if(authenticated===null||loading)return <div className="auth-screen"><div className="auth-mark">rafa<span>todo</span><i/></div><span className="auth-loading">正在打开…</span></div>;
-  if(!authenticated)return <div className="auth-screen"><form className="auth-form" onSubmit={login}><div className="auth-mark">rafa<span>todo</span><i/></div><label htmlFor="password">输入密码</label><div className="auth-input"><input id="password" type="password" autoFocus autoComplete="current-password" value={password} onChange={event=>setPassword(event.target.value)} placeholder="••••••"/><button type="submit" disabled={loggingIn||!password}>{loggingIn?'…':'进入'}</button></div>{error&&<p className="auth-error">{error}</p>}</form></div>;
+  if(authenticated===null||loading)return <div className="auth-screen"><div className="auth-mark">Rafa<span>todo</span><i/></div><span className="auth-loading">正在打开…</span></div>;
+  if(!authenticated)return <div className="auth-screen"><form className="auth-form" onSubmit={login}><div className="auth-mark">Rafa<span>todo</span><i/></div><div className="auth-input"><input id="password" type="password" autoFocus autoComplete="current-password" value={password} onChange={event=>setPassword(event.target.value)} aria-label="密码" placeholder="••••••" onKeyDown={event=>{if(event.key==='Enter')login(event);}}/></div>{error&&<p className="auth-error">{error}</p>}</form></div>;
   return <div className="app">
-    <header className="topbar"><a className="brand" href="/" aria-label="RafaTodo 首页">rafa<span>todo</span><i/></a><div className="top-actions"><button className="export" onClick={exportAll} aria-label="导出全部条目" title="导出 JSON"><DownloadSimple size={18}/></button><button className="logout" onClick={logout}>退出</button></div></header>
+    <header className="topbar"><a className="brand" href="/" aria-label="RafaTodo 首页">Rafa<span>todo</span><i/></a><div className="top-actions"><button className="export" onClick={exportAll} aria-label="导出全部条目" title="导出 JSON"><DownloadSimple size={18}/></button><button className="logout" onClick={logout}>退出</button></div></header>
     {error&&<div className="global-error" role="alert">{error}</div>}
     <main ref={board} className="board" style={{'--work':layout.work+'%','--life':layout.life+'%'}}>{domains.map(domain=><section className={'column '+(drop?.domain===domain&&drop.placement==='end'?'drop-column':'')} key={domain} data-domain={domain} aria-label={domain}
       onDragOver={event=>{if(event.dataTransfer.types.includes('Files'))event.preventDefault();}}
@@ -294,10 +300,14 @@ function App(){
       <div className="column-head"><h1>{domain.toUpperCase()}</h1><span>{items.filter(item=>item.domain===domain&&item.type==='todo'&&!['done','removed'].includes(item.status)).length}</span></div>
       <div className="column-scroll">
       <div className="column-content">{loading?<div className="loading">加载中…</div>:renderTree(domain)}</div>
-      <div className="add-row">{draft&&!draft.id&&!draft.parentId&&draft.domain===domain?editor():<button onClick={()=>open(null,domain)} aria-label={'在 '+domain+' 新增条目'}><Plus size={14}/><span>写一条…</span></button>}</div>
+      <div className="add-row">{draft&&!draft.id&&!draft.insert&&!draft.parentId&&draft.domain===domain?editor():<button onClick={()=>open(null,domain)} aria-label={'在 '+domain+' 新增条目'}><Plus size={14}/><span>写一条…</span></button>}</div>
       </div>
     </section>)}{divider('work')}{divider('life')}</main>
     {dragging&&<div className="drag-caption">{drop?.placement==='inside'?'成为子条目':drop?.placement==='end'?'移到 '+drop.domain+' 末尾':drop?'移动到这里':'拖到目标位置'}</div>}
+    {menu&&<div className="context-menu" style={{left:Math.min(menu.x,window.innerWidth-190),top:Math.min(menu.y,window.innerHeight-180)}} onPointerDown={event=>event.stopPropagation()}>
+      <button onClick={()=>insertNear(menu.item,'before','group')}>在上方插入标题</button><button onClick={()=>insertNear(menu.item,'after','group')}>在下方插入标题</button>
+      <button onClick={()=>insertNear(menu.item,'after','todo')}>插入任务</button><button onClick={()=>{setMenu(null);open(null,menu.item.domain,menu.item.id);}}>插入子任务</button>
+    </div>}
   </div>;
 }
 createRoot(document.getElementById('root')).render(<App/>);

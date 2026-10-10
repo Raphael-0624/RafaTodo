@@ -13,6 +13,9 @@ export function parseLine(raw,base={},entries=[]){
   else if(/^>\s?/.test(text)){type='text';text=text.replace(/^>\s?/,'');}
   const metadata={owner:'',people:'',tags:'',priority:'normal',dueDate:'',planDate:'',followupDate:'',stage:'',custom:{},dependencies:[],related:[]};
   const people=[],tags=[];
+  // Formatting and link destinations are content, never metadata.
+  const protectedParts=[];
+  text=text.replace(/`[^`\n]+`|!?\[[^\]\n]*\]\([^\s)]+\)/g,value=>{protectedParts.push(value);return '\u0000'+(protectedParts.length-1)+'\u0000';});
   const consume=(regex,callback)=>{text=text.replace(regex,(...args)=>{callback(...args);return '';});};
   const target=title=>entries.find(item=>item.id!==base.id&&item.title===title)?.id;
   consume(/(?:^|\s)after:\[\[([^\]]+)\]\]/g,(_,title)=>{const id=target(title);if(!id)throw new Error('找不到前置任务：'+title);metadata.dependencies.push(id);});
@@ -29,18 +32,29 @@ export function parseLine(raw,base={},entries=[]){
   consume(/(?:^|\s)(!!|!重要|!!紧急|!)(?=\s|$)/g,(_,flag)=>{metadata.priority=flag.startsWith('!!')?'urgent':'high';});
   consume(/(?:^|\s)~(doing|waiting)(?=\s|$)/g,(_,value)=>{status=value;});
   let signature=base.signature||'',tone=base.tone||'sage';
-  consume(/(?:^|\s)(?:sig|icon):([^\s]+)(?=\s|$)/g,(_,value)=>{signature=value;});
-  consume(/(?:^|\s)(?:tone|color):([a-z-]+)(?=\s|$)/g,(_,value)=>{tone=value;});
+  if(type==='group'){
+    consume(/(?:^|\s)(?:sig|icon):([^\s]+)(?=\s|$)/g,(_,value)=>{signature=value;});
+    consume(/(?:^|\s)(?:tone|color):([a-z-]+)(?=\s|$)/g,(_,value)=>{tone=value;});
+  }
+  text=text.replace(/\u0000(\d+)\u0000/g,(_,index)=>protectedParts[Number(index)]).trim();
   const image=text.match(/!\[([^\]]*)\]\(([^\s)]+)\)/);
   const link=text.match(/(?<!!)\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/);
-  const bareUrl=!image&&!link&&text.match(/https?:\/\/[^\s]+/);
+  const bareUrl=!image&&!link&&text.match(/^https?:\/\/[^\s]+$/i);
   let url='',imageUrl='';
   if(image){type='image';imageUrl=image[2];text=text.replace(image[0],image[1]);}
-  else if(link){if(!['text','group','bullet'].includes(type))type='todo';url=link[2];text=text.replace(link[0],link[1]);if(type==='todo'&&!mark&&text.trim()===link[1]&&!(base.id&&base.type==='todo'))type='link';}
-  else if(bareUrl){url=bareUrl[0];if(type==='todo'&&!mark&&text.trim()===url&&!(base.id&&base.type==='todo')){type='link';text=url;}}
+  else if(link&&text===link[0]&&type==='todo'&&!mark&&!(base.id&&base.type==='todo')){type='link';url=link[2];text=link[1];}
+  else if(bareUrl&&type==='todo'){url=bareUrl[0];if(!mark&&!(base.id&&base.type==='todo'))type='link';}
   metadata.owner=people[0]||'';metadata.people=people.slice(1).join(', ');metadata.tags=[...new Set(tags)].join(', ');
   const lines=text.trim().split('\n');
   return {...base,...metadata,type,status,signature,tone,title:lines.shift()?.trim()||'',content:lines.join('\n').trim(),url,image:imageUrl};
+}
+
+export function pasteLink(text,start,end,value){
+  const url=value.trim();
+  if(start===end||!/^[Hh][Tt][Tt][Pp][Ss]?:\/\/[^\s<>]+$/.test(url))return null;
+  const label=text.slice(start,end).replace(/([\[\]\\])/g,'\\$1');
+  const replacement='['+label+']('+url.replace(/\(/g,'%28').replace(/\)/g,'%29')+')';
+  return {text:text.slice(0,start)+replacement+text.slice(end),caret:start+replacement.length};
 }
 
 const quote=value=>/\s/.test(value)?'"'+value+'"':value;
