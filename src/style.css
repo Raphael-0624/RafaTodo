@@ -7,6 +7,7 @@ button:disabled{opacity:.45;cursor:wait}
 button:focus-visible,a:focus-visible,[role="button"]:focus-visible,textarea:focus-visible{outline:2px solid #438865;outline-offset:3px}
 .topbar{height:90px;display:flex;align-items:center;justify-content:flex-start;position:relative;padding:0 46px;border-bottom:1px solid #e4e6df}
 .brand{color:#202620;text-decoration:none;font-size:28px;font-weight:760;letter-spacing:-1.7px;line-height:1;display:inline-flex;align-items:baseline}
+.brand-cat{width:34px;height:34px;object-fit:contain;margin-right:9px;align-self:center}
 .brand span{font-weight:380}
 .brand i{height:7px;width:7px;background:#438865;border-radius:50%;margin-left:5px}
 /* Quiet stationery details frame the password, without extra copy. */
@@ -15,6 +16,8 @@ button:focus-visible,a:focus-visible,[role="button"]:focus-visible,textarea:focu
 .auth-screen::before{width:min(68vw,820px);height:min(68vw,820px);border-radius:50%;right:-23vw;top:-27vw}
 .auth-screen::after{width:min(52vw,620px);height:min(52vw,620px);border-radius:50%;right:-10vw;bottom:-36vw;border-color:#e7ddc6;opacity:.55}
 .auth-form{width:min(360px,100%);display:flex;flex-direction:column;align-items:flex-start;position:relative;gap:48px;margin-left:min(8vw,130px)}
+.auth-brand{display:flex;align-items:center;gap:14px}
+.auth-cat{width:92px;height:92px;object-fit:contain}
 .auth-form::before{content:"";width:34px;height:2px;background:#a6bfa1;position:absolute;top:-30px;left:0}
 .auth-form::after{content:"";position:absolute;width:8px;height:8px;border:1px solid #c3aa75;border-radius:50%;left:calc(100% + 24px);top:17px;box-shadow:0 0 0 7px #f4f0e5}
 .auth-mark{color:#202620;font-size:42px;font-weight:760;letter-spacing:-2px;line-height:1;display:inline-flex;align-items:baseline}
@@ -25,7 +28,7 @@ button:focus-visible,a:focus-visible,[role="button"]:focus-visible,textarea:focu
 .auth-input input::placeholder{color:#c0caba;letter-spacing:.3em}
 .auth-error{color:#b45c4d;font-size:11px;margin:0;position:absolute;top:100%;padding-top:18px;text-align:left}
 .auth-loading{color:#a2ab9b;font-size:11px;margin-top:24px}
-@media(max-width:720px){.topbar .brand{font-size:23px}.auth-screen{padding:0 28px}.auth-form{margin-left:0;gap:42px}.auth-mark{font-size:38px}.auth-screen::before{width:100vw;height:100vw;right:-55vw;top:-8vw}.auth-screen::after{width:74vw;height:74vw;right:-35vw;bottom:-28vw}.auth-form::after{left:calc(100% - 2px);top:12px}}
+@media(max-width:720px){.topbar .brand{font-size:23px}.brand-cat{width:30px;height:30px;margin-right:7px}.auth-screen{padding:0 28px}.auth-form{margin-left:0;gap:42px}.auth-mark{font-size:38px}.auth-cat{width:76px;height:76px}.auth-screen::before{width:100vw;height:100vw;right:-55vw;top:-8vw}.auth-screen::after{width:74vw;height:74vw;right:-35vw;bottom:-28vw}.auth-form::after{left:calc(100% - 2px);top:12px}}
 
 .board{display:grid;grid-template-columns:var(--work,50%) minmax(0,1fr);grid-template-rows:var(--life,50%) minmax(0,1fr);grid-template-areas:"work life" "work glean";height:calc(100dvh - 90px);min-height:360px;max-width:1920px;margin:auto;position:relative}
 .column{min-width:0;min-height:0;padding:24px 31px 35px;border-right:1px solid #e4e6df;position:relative;overflow:auto}
