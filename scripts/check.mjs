@@ -5,6 +5,17 @@ import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
 import {parseLine,toLine} from '../src/lib/entries.js';
+const group=parseLine('## 项目 sig:🚀 tone:sage');
+assert.equal(group.type,'group');assert.equal(group.title,'项目');assert.equal(group.signature,'🚀');assert.equal(group.tone,'sage');
+assert.equal(toLine(group),'## 项目 sig:🚀 tone:sage');
+assert.equal(parseLine(toLine({...group,id:'group',collapsed:true}),{...group,id:'group',collapsed:true}).collapsed,true);
+assert.equal(parseLine('---').type,'divider');assert.equal(toLine(parseLine('---')),'---');
+const bullet=parseLine('- 清理收件箱 #整理');
+assert.equal(bullet.type,'bullet');assert.equal(bullet.title,'清理收件箱');assert.equal(bullet.tags,'整理');
+assert.equal(toLine(bullet),'- 清理收件箱 #整理');
+assert.equal(parseLine('- [ ] 清理收件箱').type,'todo');
+assert.equal(parseLine('- [x] 清理收件箱').status,'done');
+assert.equal(parseLine('- [-] 清理收件箱').status,'removed');
 for(const status of ['open','doing','waiting','done','removed']){
   const task={id:'task',type:'todo',status,title:'原任务',content:'',owner:'小明',tags:'工作'};
   const line=toLine(task,[],{hideTaskPrefix:true});

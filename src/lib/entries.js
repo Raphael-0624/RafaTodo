@@ -3,6 +3,11 @@ export const domains=['Work','Life','Glean & Idea'];
 // A plain line is a task. Only explicit notation creates metadata.
 export function parseLine(raw,base={},entries=[]){
   let text=raw.trim(),type='todo',status=base.status||'open';
+  if(/^---+$/.test(text))return {...base,type:'divider',title:'',content:'',status:'open',url:'',image:'',owner:'',people:'',tags:'',priority:'normal',custom:{},dependencies:[],related:[]};
+  const group=text.match(/^##\s+([\s\S]+)$/);
+  if(group){type='group';text=group[1].trim();}
+  const bullet=text.match(/^-\s+(.+)$/);
+  if(bullet&&!group&&!/^\[([ xX-])\]/.test(bullet[1])){type='bullet';text=bullet[1].trim();}
   const mark=text.match(/^-?\s*\[([ xX-])\]\s*/);
   if(mark){status=mark[1]==='-'?'removed':/x/i.test(mark[1])?'done':'open';text=text.slice(mark[0].length);}
   else if(/^>\s?/.test(text)){type='text';text=text.replace(/^>\s?/,'');}
@@ -23,25 +28,29 @@ export function parseLine(raw,base={},entries=[]){
   consume(/(?:^|\s)#([\p{L}\p{N}_/-]+)/gu,(_,tag)=>tags.push(tag));
   consume(/(?:^|\s)(!!|!重要|!!紧急|!)(?=\s|$)/g,(_,flag)=>{metadata.priority=flag.startsWith('!!')?'urgent':'high';});
   consume(/(?:^|\s)~(doing|waiting)(?=\s|$)/g,(_,value)=>{status=value;});
+  let signature=base.signature||'',tone=base.tone||'sage';
+  consume(/(?:^|\s)(?:sig|icon):([^\s]+)(?=\s|$)/g,(_,value)=>{signature=value;});
+  consume(/(?:^|\s)(?:tone|color):([a-z-]+)(?=\s|$)/g,(_,value)=>{tone=value;});
   const image=text.match(/!\[([^\]]*)\]\(([^\s)]+)\)/);
   const link=text.match(/(?<!!)\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/);
   const bareUrl=!image&&!link&&text.match(/https?:\/\/[^\s]+/);
   let url='',imageUrl='';
   if(image){type='image';imageUrl=image[2];text=text.replace(image[0],image[1]);}
-  else if(link){if(type!=='text')type='todo';url=link[2];text=text.replace(link[0],link[1]);if(!mark&&text.trim()===link[1]&&!(base.id&&base.type==='todo'))type='link';}
-  else if(bareUrl){url=bareUrl[0];if(!mark&&text.trim()===url&&!(base.id&&base.type==='todo')){type='link';text=url;}}
+  else if(link){if(!['text','group','bullet'].includes(type))type='todo';url=link[2];text=text.replace(link[0],link[1]);if(type==='todo'&&!mark&&text.trim()===link[1]&&!(base.id&&base.type==='todo'))type='link';}
+  else if(bareUrl){url=bareUrl[0];if(type==='todo'&&!mark&&text.trim()===url&&!(base.id&&base.type==='todo')){type='link';text=url;}}
   metadata.owner=people[0]||'';metadata.people=people.slice(1).join(', ');metadata.tags=[...new Set(tags)].join(', ');
   const lines=text.trim().split('\n');
-  return {...base,...metadata,type,status,title:lines.shift()?.trim()||'',content:lines.join('\n').trim(),url,image:imageUrl};
+  return {...base,...metadata,type,status,signature,tone,title:lines.shift()?.trim()||'',content:lines.join('\n').trim(),url,image:imageUrl};
 }
 
 const quote=value=>/\s/.test(value)?'"'+value+'"':value;
 export function toLine(item,entries=[],{hideTaskPrefix=false}={}){
+  if(item.type==='divider')return '---';
   let text=item.title||'';
   if(item.image)text='!['+text+']('+item.image+')';
   else if(item.url&&text!==item.url)text='['+text+']('+item.url+')';
   else if(item.url)text=item.url;
-  const prefix=hideTaskPrefix&&item.type==='todo'?'':!hideTaskPrefix&&item.status==='removed'?'- [-] ':item.type==='todo'?(item.status==='done'?'- [x] ':'- [ ] '):item.type==='text'?'> ':'';
+  const prefix=item.type==='group'?'## ':item.type==='bullet'?'- ':hideTaskPrefix&&item.type==='todo'?'':!hideTaskPrefix&&item.status==='removed'?'- [-] ':item.type==='todo'?(item.status==='done'?'- [x] ':'- [ ] '):item.type==='text'?'> ':'';
   const tokens=[];
   if(item.owner)tokens.push('@'+quote(item.owner));
   if(item.people)tokens.push(...item.people.split(/[,，]\s*/).filter(Boolean).map(name=>'@'+quote(name)));
@@ -49,6 +58,8 @@ export function toLine(item,entries=[],{hideTaskPrefix=false}={}){
   if(item.priority==='high')tokens.push('!重要');
   if(item.priority==='urgent')tokens.push('!!紧急');
   if(['doing','waiting'].includes(item.status))tokens.push('~'+item.status);
+  if(item.type==='group'&&item.signature)tokens.push('sig:'+item.signature);
+  if(item.type==='group'&&item.tone)tokens.push('tone:'+item.tone);
   for(const [key,label] of [['dueDate','due'],['planDate','plan'],['followupDate','follow'],['stage','stage']])if(item[key])tokens.push(label+':'+quote(item[key]));
   for(const [key,value] of Object.entries(item.custom||{}))if(String(value))tokens.push(key+'::'+quote(String(value)));
   for(const [key,prefix] of [['dependencies','after:'],['related','']])for(const id of item[key]||[]){const title=entries.find(entry=>entry.id===id)?.title;if(title)tokens.push(prefix+'[['+title+']]');}

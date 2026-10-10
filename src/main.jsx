@@ -1,6 +1,6 @@
 import React,{useState,useEffect,useLayoutEffect,useRef} from 'react';
 import {createRoot} from 'react-dom/client';
-import {Plus,ArrowUpRight,Check,TextT,LinkSimple,ImageSquare,DotsSixVertical,DownloadSimple,X,Trash,ArrowCounterClockwise} from '@phosphor-icons/react';
+import {Plus,ArrowUpRight,Check,TextT,LinkSimple,ImageSquare,DotsSixVertical,DownloadSimple,X,Trash,ArrowCounterClockwise,CaretDown,CaretRight} from '@phosphor-icons/react';
 import {domains,parseLine,toLine,treeRows} from './lib/entries.js';
 import './style.css';
 
@@ -11,6 +11,7 @@ async function api(url,method='GET',body){
   return data;
 }
 const titleOf=item=>item.title||item.content||item.url||'图片';
+function inline(value){return String(value).split(/(`[^`]+`|==[^=]+==|\*\*[^*]+\*\*|~~[^~]+~~|\*[^*]+\*)/g).map((part,index)=>{if(part.startsWith('`'))return <code key={index}>{part.slice(1,-1)}</code>;if(part.startsWith('=='))return <mark key={index}>{part.slice(2,-2)}</mark>;if(part.startsWith('**'))return <strong key={index}>{part.slice(2,-2)}</strong>;if(part.startsWith('~~'))return <del key={index}>{part.slice(2,-2)}</del>;if(part.startsWith('*'))return <em key={index}>{part.slice(1,-1)}</em>;return part;});}
 const editLine=(item,entries)=>toLine(item,entries,{hideTaskPrefix:true});
 const prefersReducedMotion=()=>window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 const clamp=value=>Math.min(75,Math.max(25,value));
@@ -22,6 +23,8 @@ function App(){
   const [drop,setDrop]=useState(null),[dragging,setDragging]=useState(''),[hint,setHint]=useState(null),[choice,setChoice]=useState(0);
   const textarea=useRef(null),drag=useRef(null),currentDrop=useRef(null),suppressClick=useRef(false);
   const saving=useRef(null);
+  const [picker,setPicker]=useState('');
+
   const [layout,setLayout]=useState(readLayout);
   const board=useRef(null),beforePositions=useRef(null);
   useLayoutEffect(()=>{
@@ -52,7 +55,7 @@ function App(){
   useEffect(()=>()=>{drag.current?.cleanup?.();},[]);
   useEffect(()=>{
     if(!draft)return;
-    const commit=event=>{if(!event.target.closest('.write-row, .drag-handle, .row-actions'))save();};
+    const commit=event=>{if(!event.target.closest('.write-row, .drag-handle, .row-actions, .group-controls'))save();};
     document.addEventListener('pointerdown',commit);
     return ()=>document.removeEventListener('pointerdown',commit);
   },[draft,text,busy]);
@@ -68,7 +71,7 @@ function App(){
     setBusy(true);setError('');
     const operation=(async()=>{try{
       const value=parseLine(text,draft,items);
-      if(!value.title&&!value.content&&!value.image&&!value.url){close();return true;}
+      if(value.type!=='divider'&&!value.title&&!value.content&&!value.image&&!value.url){close();return true;}
       const saved=await api('/api/entries'+(value.id?'/'+value.id:''),value.id?'PUT':'POST',value);
       replaceItem(saved);
       if(closeAfter)close();else{setDraft(saved);setText(editLine(saved,items));}
@@ -77,11 +80,11 @@ function App(){
     saving.current=operation;
     try{return await operation;}finally{saving.current=null;}
   }
-  async function open(item,domain){
+  async function open(item,domain,parentId=''){
     if((busy&&!saving.current)||suppressClick.current)return;
     if(draft&&(item?.id===draft.id&&item?.id||!item&&!draft.id&&draft.domain===domain)){textarea.current?.focus();return;}
     if(draft&&!await save())return;
-    const value=item||{domain,title:'',content:'',type:'todo',status:'open',parentId:'',position:Math.max(-1,...items.filter(entry=>entry.domain===domain&&!entry.parentId).map(entry=>entry.position??0))+1};
+    const value=item||{domain,title:'',content:'',type:'todo',status:'open',parentId,position:Math.max(-1,...items.filter(entry=>entry.domain===domain&&(entry.parentId||'')===parentId).map(entry=>entry.position??0))+1};
     setDraft(value);setText(item?editLine(item,items):'');setHint(null);setError('');
   }
   async function updateStatus(item,status=item.status==='done'?'open':'done'){
@@ -89,6 +92,12 @@ function App(){
     if(draft){const saved=await save();if(!saved)return;if(saved.id===item.id)item=saved;}
     setBusy(true);setError('');
     try{replaceItem(await api('/api/entries/'+item.id,'PUT',{...item,status}));feedback(item.id);}catch(e){setError(e.message);}finally{setBusy(false);}
+  }
+  async function configureGroup(item,patch){
+    if(busy)return;
+    if(draft&&!await save())return;
+    setBusy(true);setError('');
+    try{replaceItem(await api('/api/entries/'+item.id,'PUT',{...item,...patch}));}catch(e){setError(e.message);}finally{setBusy(false);}
   }
   async function deleteItem(item){
     if(busy)return;
@@ -218,19 +227,21 @@ function App(){
     </div>;
   }
   function row(item,depth){
-    const editing=draft?.id===item.id,done=item.status==='done',removed=item.status==='removed';
+    const editing=draft?.id===item.id,done=item.status==='done',removed=item.status==='removed',group=item.type==='group',divider=item.type==='divider';
+    const descendants=new Set([item.id]);let changed=true;while(changed){changed=false;for(const child of items){if(descendants.has(child.parentId)&&!descendants.has(child.id)){descendants.add(child.id);changed=true;}}}
+    const tasks=items.filter(entry=>entry.id!==item.id&&descendants.has(entry.id)&&entry.type==='todo'&&entry.status!=='removed');
     const target=drop?.targetId===item.id?drop.placement:'';
     const overdue=item.type==='todo'&&item.dueDate&&item.dueDate<new Date().toLocaleDateString('en-CA')&&!done&&!removed;
     const statusDate=(removed?item.removedAt:done?item.completedAt:null);
     const statusCaption=statusDate?new Date(statusDate).toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'})+(removed?'取消':'完成'):'';
     const timeTitle=[['createdAt','创建'],['updatedAt','更新'],['completedAt','完成'],['removedAt','移除']].filter(([key])=>item[key]).map(([key,name])=>name+'：'+new Date(item[key]).toLocaleString('zh-CN',{hour12:false})).join('\n');
-    return <div key={item.id} className={'entry '+(done?'is-done ':'')+(removed?'is-removed ':'')+(dragging===item.id?'drag-source ':'')+(target?'drop-'+target:'')} data-entry-id={item.id} data-depth={depth} style={{'--depth':depth}}>
+    return <div key={item.id} className={'entry '+(done?'is-done ':'')+(removed?'is-removed ':'')+(group?'is-group ':'')+(divider?'is-divider ':'')+(dragging===item.id?'drag-source ':'')+(target?'drop-'+target:'')} data-entry-id={item.id} data-depth={depth} style={{'--depth':depth}}>
       <button className="drag-handle" title="拖动排序；放在文字中间成为子条目" aria-label={'拖动 '+titleOf(item)} onPointerDown={event=>beginDrag(event,item)}><DotsSixVertical size={14}/></button>
       {editing?editor():<div className="entry-read">
-        {item.type==='todo'?<button className={'checkbox '+(done?'checked':'')} aria-label={done?'重新打开任务':'完成任务'} onClick={()=>updateStatus(item)} disabled={busy}>{done&&<Check size={11} weight="bold"/>}{removed&&<span>−</span>}</button>:<span className="kind-mark">{item.type==='text'?<TextT size={15}/>:item.type==='link'?<LinkSimple size={15}/>:<ImageSquare size={15}/>}</span>}
+        {group?<button className={'group-toggle '+(item.collapsed?'collapsed':'')} aria-label={item.collapsed?'展开分组':'收起分组'} aria-expanded={!item.collapsed} onClick={()=>configureGroup(item,{collapsed:!item.collapsed})}><CaretDown size={15}/></button>:divider?<span className="kind-mark">—</span>:item.type==='todo'?<button className={'checkbox '+(done?'checked':'')} aria-label={done?'重新打开任务':'完成任务'} onClick={()=>updateStatus(item)} disabled={busy}>{done&&<Check size={11} weight="bold"/>}{removed&&<span>−</span>}</button>:<span className="kind-mark">{item.type==='text'?<TextT size={15}/>:item.type==='link'?<LinkSimple size={15}/>:item.type==='bullet'?<span>•</span>:<ImageSquare size={15}/>}</span>}
         <button className="entry-body" title={timeTitle} onClick={()=>open(item)} aria-label={'编辑 '+titleOf(item)}>
-          <span className="entry-title">{titleOf(item)}</span>
-          {item.content&&item.title&&<span className="entry-note">{item.content}</span>}
+          <span className="entry-title">{divider?<span className="md-rule"/>:inline(titleOf(item))}</span>
+          {item.content&&item.title&&<span className="entry-note">{item.content.split('\n').map((line,index)=><span className="note-line" key={index}>{inline(line)}</span>)}</span>}
           {item.image&&<img className="thumb" src={item.image} alt={item.title||'条目图片'}/>}
           <span className="entry-meta">
             {item.priority==='urgent'&&<span className="urgent">!! 紧急</span>}{item.priority==='high'&&<span className="high">! 重要</span>}
@@ -247,6 +258,9 @@ function App(){
           </span>
           {statusCaption&&<span className="status-caption">{statusCaption}</span>}
         </button>
+        {group&&<div className="group-controls"><button className="signature" title="选择分组图标和底色" onClick={()=>setPicker(picker===item.id?'':item.id)}>{item.signature||'◦'}</button><span className="group-count" title="已完成 / 总任务数（不含取消）">{tasks.filter(task=>task.status==='done').length}/{tasks.length}</span><button title="在分组内写一条" aria-label="在分组内新增条目" onClick={()=>open(null,item.domain,item.id)}><Plus size={14}/></button>
+          {picker===item.id&&<div className="group-picker"><div>{['◦','📌','📝','🚀','💡','🌿','🏠','💼'].map(signature=><button key={signature} aria-label={'图标 '+signature} onClick={()=>{configureGroup(item,{signature});setPicker('');}}>{signature}</button>)}</div><div>{['sage','sand','blue','rose','none'].map(tone=><button className={'tone-swatch tone-'+tone} key={tone} aria-label={'底色 '+tone} onClick={()=>{configureGroup(item,{tone});setPicker('');}}/>)}</div></div>}
+        </div>}
         <div className="row-actions">
           <button title={removed?'恢复条目':'取消条目'} aria-label={removed?'恢复条目':'取消条目'} disabled={busy} onClick={()=>updateStatus(item,removed?'open':'removed')}>{removed?<ArrowCounterClockwise size={14}/>:<X size={14}/>}</button>
           <button title="永久删除" aria-label="永久删除条目" disabled={busy} onClick={()=>deleteItem(item)}><Trash size={14}/></button>
@@ -254,6 +268,15 @@ function App(){
         {item.url&&<a className="open-link" href={item.url} target="_blank" rel="noreferrer" aria-label="打开链接" title="打开链接"><ArrowUpRight size={15}/></a>}
       </div>}
     </div>;
+  }
+  function renderTree(domain){
+    const rows=treeRows(items,domain);
+    function renderBranch(parentId='',level=0){return rows.filter(({item})=>(item.parentId||'')===parentId||!parentId&&item.parentId&&!items.some(entry=>entry.id===item.parentId&&entry.domain===domain)).map(({item})=>{
+      const children=renderBranch(item.id,level+1);
+      if(item.type==='group')return <div key={item.id} className={'group-block tone-'+(['sage','sand','blue','rose','none'].includes(item.tone)?item.tone:'sage')} style={{marginLeft:level?18:0}}>{row(item,0)}{!item.collapsed&&<div className="group-children">{children}{draft&&!draft.id&&draft.parentId===item.id&&editor()}</div>}</div>;
+      return <React.Fragment key={item.id}>{row(item,level)}{children}</React.Fragment>;
+    });}
+    return renderBranch();
   }
   function exportAll(){
     const link=document.createElement('a'),url=URL.createObjectURL(new Blob([JSON.stringify(items,null,2)],{type:'application/json'}));
@@ -270,8 +293,8 @@ function App(){
       <div className="column-watermark" aria-hidden="true">{domain==='Glean & Idea'?<>GLEAN<span>& IDEA</span></>:domain.toUpperCase()}</div>
       <div className="column-head"><h1>{domain.toUpperCase()}</h1><span>{items.filter(item=>item.domain===domain&&item.type==='todo'&&!['done','removed'].includes(item.status)).length}</span></div>
       <div className="column-scroll">
-      <div className="column-content">{loading?<div className="loading">加载中…</div>:treeRows(items,domain).map(({item,depth})=>row(item,depth))}</div>
-      <div className="add-row">{draft&&!draft.id&&draft.domain===domain?editor():<button onClick={()=>open(null,domain)} aria-label={'在 '+domain+' 新增条目'}><Plus size={14}/><span>写一条…</span></button>}</div>
+      <div className="column-content">{loading?<div className="loading">加载中…</div>:renderTree(domain)}</div>
+      <div className="add-row">{draft&&!draft.id&&!draft.parentId&&draft.domain===domain?editor():<button onClick={()=>open(null,domain)} aria-label={'在 '+domain+' 新增条目'}><Plus size={14}/><span>写一条…</span></button>}</div>
       </div>
     </section>)}{divider('work')}{divider('life')}</main>
     {dragging&&<div className="drag-caption">{drop?.placement==='inside'?'成为子条目':drop?.placement==='end'?'移到 '+drop.domain+' 末尾':drop?'移动到这里':'拖到目标位置'}</div>}

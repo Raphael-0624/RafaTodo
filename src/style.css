@@ -131,3 +131,22 @@ button:focus-visible,a:focus-visible,textarea:focus-visible{outline:2px solid #4
   .column:nth-child(3) .column-watermark{font-size:19vw}
 }
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+.group-block{position:relative;border-radius:5px;margin:9px 0;padding:5px 8px;--group-bg:#edf2e980;background:var(--group-bg)}
+.tone-sage{--group-bg:#edf2e9b0}.tone-sand{--group-bg:#f3eedfb0}.tone-blue{--group-bg:#e8eff5b0}.tone-rose{--group-bg:#f4e9e9b0}.tone-none{--group-bg:transparent}
+.is-group .entry-title{font-weight:650;font-size:13px;color:#384534}
+.group-toggle{width:15px;height:19px;flex:0 0 15px;padding:0;display:grid;place-items:center;color:#8c9984}
+.group-toggle svg{transition:transform 160ms ease}.group-toggle.collapsed svg{transform:rotate(-90deg)}
+.group-controls{display:flex;align-items:center;gap:5px;position:relative;flex:0 0 auto;font-size:11px;color:#8b9783}
+.group-controls>button{padding:2px;display:grid;place-items:center;min-width:18px;height:21px}
+.group-count{font-size:10px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.group-picker{position:absolute;right:0;top:26px;z-index:8;padding:8px;background:#fcfcfa;box-shadow:0 4px 18px #30402a18;border:1px solid #dfe5d9;border-radius:5px;min-width:170px}
+.group-picker>div{display:flex;gap:4px;flex-wrap:wrap;margin:3px 0}.group-picker button{width:27px;height:27px;padding:2px;border-radius:3px}.group-picker button:hover{background:#e7edde}
+.group-picker .tone-swatch{background:var(--group-bg);border:1px solid #cdd7c6;width:22px;height:22px}
+.group-children{padding:2px 0 3px 20px}
+.group-children .entry[data-depth]::after{display:none}
+.entry-title mark,.entry-note mark{background:#eee4a5b0;color:inherit;padding:0 2px;border-radius:2px}
+.entry-title code,.entry-note code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:.92em;background:#e7ece4;padding:1px 3px;border-radius:3px}
+.note-line{display:block}.entry-title strong{font-weight:650}
+.is-divider .entry-title{width:100%;padding:8px 0}.md-rule{display:block;width:100%;border-top:1px solid #cad3c3}
+.is-divider .kind-mark{visibility:hidden}
+@media(max-width:720px){.group-block{padding:5px}.group-children{padding-left:14px}}
