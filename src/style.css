@@ -9,9 +9,6 @@ button:focus-visible,a:focus-visible,[role="button"]:focus-visible,textarea:focu
 .brand{color:#202620;text-decoration:none;font-size:28px;font-weight:760;letter-spacing:-1.7px;line-height:1;display:inline-flex;align-items:baseline}
 .brand span{font-weight:380}
 .brand i{height:7px;width:7px;background:#438865;border-radius:50%;margin-left:5px}
-.export{width:32px;height:32px;display:grid;place-items:center;color:#a0a69e;border-radius:4px}
-.export:hover{color:#438865;background:#eff3ed}
-.top-actions{position:absolute;right:46px;display:flex;align-items:center;gap:8px}.logout{font-size:11px;color:#9ba49a;padding:7px 9px;border-radius:4px}.logout:hover{color:#438865;background:#eff3ed}
 /* Quiet stationery details frame the password, without extra copy. */
 .auth-screen{min-height:100dvh;display:flex;flex-direction:column;justify-content:center;align-items:flex-start;padding:0 max(10vw,40px);background:#fcfcfa;position:relative;overflow:hidden;isolation:isolate}
 .auth-screen::before,.auth-screen::after{content:"";position:absolute;pointer-events:none;z-index:-1;border:1px solid #dbe3d6;opacity:.7}
@@ -28,7 +25,7 @@ button:focus-visible,a:focus-visible,[role="button"]:focus-visible,textarea:focu
 .auth-input input::placeholder{color:#c0caba;letter-spacing:.3em}
 .auth-error{color:#b45c4d;font-size:11px;margin:0;position:absolute;top:100%;padding-top:18px;text-align:left}
 .auth-loading{color:#a2ab9b;font-size:11px;margin-top:24px}
-@media(max-width:720px){.top-actions{right:16px;gap:0}.topbar .brand{font-size:23px}.auth-screen{padding:0 28px}.auth-form{margin-left:0;gap:42px}.auth-mark{font-size:38px}.auth-screen::before{width:100vw;height:100vw;right:-55vw;top:-8vw}.auth-screen::after{width:74vw;height:74vw;right:-35vw;bottom:-28vw}.auth-form::after{left:calc(100% - 2px);top:12px}}
+@media(max-width:720px){.topbar .brand{font-size:23px}.auth-screen{padding:0 28px}.auth-form{margin-left:0;gap:42px}.auth-mark{font-size:38px}.auth-screen::before{width:100vw;height:100vw;right:-55vw;top:-8vw}.auth-screen::after{width:74vw;height:74vw;right:-35vw;bottom:-28vw}.auth-form::after{left:calc(100% - 2px);top:12px}}
 
 .board{display:grid;grid-template-columns:var(--work,50%) minmax(0,1fr);grid-template-rows:var(--life,50%) minmax(0,1fr);grid-template-areas:"work life" "work glean";height:calc(100dvh - 90px);min-height:360px;max-width:1920px;margin:auto;position:relative}
 .column{min-width:0;min-height:0;padding:24px 31px 35px;border-right:1px solid #e4e6df;position:relative;overflow:auto}

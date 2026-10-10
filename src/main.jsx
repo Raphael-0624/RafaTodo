@@ -1,6 +1,6 @@
 import React,{useState,useEffect,useLayoutEffect,useRef} from 'react';
 import {createRoot} from 'react-dom/client';
-import {Plus,ArrowUpRight,Check,TextT,LinkSimple,ImageSquare,DotsSixVertical,DownloadSimple,X,Trash,ArrowCounterClockwise,CaretDown,CaretRight} from '@phosphor-icons/react';
+import {Plus,ArrowUpRight,Check,TextT,LinkSimple,ImageSquare,DotsSixVertical,X,Trash,ArrowCounterClockwise,CaretDown,CaretRight} from '@phosphor-icons/react';
 import {domains,parseLine,toLine,treeRows,pasteLink} from './lib/entries.js';
 import './style.css';
 
@@ -62,7 +62,6 @@ function App(){
   useEffect(()=>{const closeTransient=event=>{setMenu(null);if(!event.target.closest('.row-actions'))setConfirmDelete('');};document.addEventListener('pointerdown',closeTransient);return()=>document.removeEventListener('pointerdown',closeTransient);},[]);
   function replaceItem(saved){applyItems(itemsRef.current.some(item=>item.id===saved.id)?itemsRef.current.map(item=>item.id===saved.id?saved:item):[...itemsRef.current,saved]);}
   async function login(event){event.preventDefault();if(!password.trim()||loggingIn)return;setLoggingIn(true);setError('');try{await api('/api/auth/login','POST',{password});setPassword('');setAuthenticated(true);setItems(await api('/api/entries'));}catch(e){setError(e.message);}finally{setLoggingIn(false);}}
-  async function logout(){await api('/api/auth/logout','POST').catch(()=>{});setAuthenticated(false);setItems([]);close();}
   function close(){setDraft(null);setText('');setHint(null);}
   async function save(closeAfter=true){
     if(saving.current)return saving.current;
@@ -285,14 +284,10 @@ function App(){
     });}
     return renderBranch();
   }
-  function exportAll(){
-    const link=document.createElement('a'),url=URL.createObjectURL(new Blob([JSON.stringify(items,null,2)],{type:'application/json'}));
-    link.href=url;link.download='rafatodo.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
-  }
   if(authenticated===null||loading)return <div className="auth-screen"><div className="auth-mark">Rafa<span>todo</span><i/></div><span className="auth-loading">正在打开…</span></div>;
   if(!authenticated)return <div className="auth-screen"><form className="auth-form" onSubmit={login}><div className="auth-mark">Rafa<span>todo</span><i/></div><div className="auth-input"><input id="password" type="password" autoFocus autoComplete="current-password" value={password} onChange={event=>setPassword(event.target.value)} aria-label="密码" placeholder="••••••" onKeyDown={event=>{if(event.key==='Enter')login(event);}}/></div>{error&&<p className="auth-error">{error}</p>}</form></div>;
   return <div className="app">
-    <header className="topbar"><a className="brand" href="/" aria-label="RafaTodo 首页">Rafa<span>todo</span><i/></a><div className="top-actions"><button className="export" onClick={exportAll} aria-label="导出全部条目" title="导出 JSON"><DownloadSimple size={18}/></button><button className="logout" onClick={logout}>退出</button></div></header>
+    <header className="topbar"><a className="brand" href="/" aria-label="RafaTodo 首页">Rafa<span>todo</span><i/></a></header>
     {error&&<div className="global-error" role="alert">{error}</div>}
     <main ref={board} className="board" style={{'--work':layout.work+'%','--life':layout.life+'%'}}>{domains.map(domain=><section className={'column '+(drop?.domain===domain&&drop.placement==='end'?'drop-column':'')} key={domain} data-domain={domain} aria-label={domain}
       onDragOver={event=>{if(event.dataTransfer.types.includes('Files'))event.preventDefault();}}
