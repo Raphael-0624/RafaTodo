@@ -2,7 +2,7 @@ export const domains=['Work','Life','Glean & Idea'];
 
 // A plain line is a task. Only explicit notation creates metadata.
 export function parseLine(raw,base={},entries=[]){
-  let text=raw.trim(),type='todo',status='open';
+  let text=raw.trim(),type='todo',status=base.status||'open';
   const mark=text.match(/^-?\s*\[([ xX-])\]\s*/);
   if(mark){status=mark[1]==='-'?'removed':/x/i.test(mark[1])?'done':'open';text=text.slice(mark[0].length);}
   else if(/^>\s?/.test(text)){type='text';text=text.replace(/^>\s?/,'');}
@@ -22,26 +22,26 @@ export function parseLine(raw,base={},entries=[]){
   consume(/(?:^|\s)@("[^"]+"|[\p{L}\p{N}_·.-]+)/gu,(_,name)=>people.push(name.replace(/^"|"$/g,'')));
   consume(/(?:^|\s)#([\p{L}\p{N}_/-]+)/gu,(_,tag)=>tags.push(tag));
   consume(/(?:^|\s)(!!|!重要|!!紧急|!)(?=\s|$)/g,(_,flag)=>{metadata.priority=flag.startsWith('!!')?'urgent':'high';});
-  consume(/(?:^|\s)~(doing|waiting)(?=\s|$)/g,(_,value)=>{if(status==='open')status=value;});
+  consume(/(?:^|\s)~(doing|waiting)(?=\s|$)/g,(_,value)=>{status=value;});
   const image=text.match(/!\[([^\]]*)\]\(([^\s)]+)\)/);
   const link=text.match(/(?<!!)\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/);
   const bareUrl=!image&&!link&&text.match(/https?:\/\/[^\s]+/);
   let url='',imageUrl='';
   if(image){type='image';imageUrl=image[2];text=text.replace(image[0],image[1]);}
-  else if(link){if(type!=='text')type='todo';url=link[2];text=text.replace(link[0],link[1]);if(!mark&&text.trim()===link[1])type='link';}
-  else if(bareUrl){url=bareUrl[0];if(!mark&&text.trim()===url){type='link';text=url;}}
+  else if(link){if(type!=='text')type='todo';url=link[2];text=text.replace(link[0],link[1]);if(!mark&&text.trim()===link[1]&&!(base.id&&base.type==='todo'))type='link';}
+  else if(bareUrl){url=bareUrl[0];if(!mark&&text.trim()===url&&!(base.id&&base.type==='todo')){type='link';text=url;}}
   metadata.owner=people[0]||'';metadata.people=people.slice(1).join(', ');metadata.tags=[...new Set(tags)].join(', ');
   const lines=text.trim().split('\n');
   return {...base,...metadata,type,status,title:lines.shift()?.trim()||'',content:lines.join('\n').trim(),url,image:imageUrl};
 }
 
 const quote=value=>/\s/.test(value)?'"'+value+'"':value;
-export function toLine(item,entries=[]){
+export function toLine(item,entries=[],{hideTaskPrefix=false}={}){
   let text=item.title||'';
   if(item.image)text='!['+text+']('+item.image+')';
   else if(item.url&&text!==item.url)text='['+text+']('+item.url+')';
   else if(item.url)text=item.url;
-  const prefix=item.status==='removed'?'- [-] ':item.type==='todo'?(item.status==='done'?'- [x] ':'- [ ] '):item.type==='text'?'> ':'';
+  const prefix=hideTaskPrefix&&item.type==='todo'?'':!hideTaskPrefix&&item.status==='removed'?'- [-] ':item.type==='todo'?(item.status==='done'?'- [x] ':'- [ ] '):item.type==='text'?'> ':'';
   const tokens=[];
   if(item.owner)tokens.push('@'+quote(item.owner));
   if(item.people)tokens.push(...item.people.split(/[,，]\s*/).filter(Boolean).map(name=>'@'+quote(name)));
