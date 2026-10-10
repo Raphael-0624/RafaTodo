@@ -1,6 +1,6 @@
 import React,{useState,useEffect,useLayoutEffect,useRef} from 'react';
 import {createRoot} from 'react-dom/client';
-import {Plus,ArrowUpRight,Check,TextT,LinkSimple,ImageSquare,DotsSixVertical,X,Trash,ArrowCounterClockwise,CaretDown,CaretRight,ChartBar,Sparkle} from '@phosphor-icons/react';
+import {Plus,ArrowUpRight,Check,TextT,LinkSimple,ImageSquare,DotsSixVertical,X,Trash,ArrowCounterClockwise,CaretDown,CaretRight,ChartBar,Sparkle,Archive} from '@phosphor-icons/react';
 import {domains,parseLine,toLine,treeRows,pasteLink} from './lib/entries.js';
 import './style.css';
 
@@ -18,6 +18,7 @@ const clamp=value=>Math.min(75,Math.max(25,value));
 function readLayout(){try{const value=JSON.parse(localStorage.getItem('rafa-layout'));return {work:clamp(Number(value?.work)||50),life:clamp(Number(value?.life)||50)};}catch{return {work:50,life:50};}}
 const dayKey=value=>{const date=new Date(value);return Number.isNaN(date.getTime())?'':date.toLocaleDateString('en-CA');};
 function Toast({message,onClose}){useEffect(()=>{if(!message)return;const timer=setTimeout(onClose,3600);return()=>clearTimeout(timer);},[message,onClose]);if(!message)return null;return <div className="toast" role="alert" onClick={onClose}>{message}</div>}
+function ArchiveModal({open,items,onClose}){if(!open)return null;return <div className="archive-backdrop" onPointerDown={onClose}><div className="archive-modal" role="dialog" aria-label="归档内容" onPointerDown={event=>event.stopPropagation()}><div className="archive-head"><strong>归档</strong><button onClick={onClose} aria-label="关闭归档">×</button></div>{domains.map(domain=>{const entries=items.filter(item=>item.domain===domain).sort((a,b)=>new Date(b.completedAt||b.removedAt||b.archivedAt)-new Date(a.completedAt||a.removedAt||a.archivedAt));return <section className="archive-section" key={domain}><h2>{domain.toUpperCase()} <span>{entries.length}</span></h2>{entries.length?<div className="archive-list">{entries.map(item=><div className="archive-item" key={item.id}><span className="archive-status">{item.status==='done'?'完成':'移除'}</span><span className="archive-title">{titleOf(item)}</span><time>{new Date(item.completedAt||item.removedAt||item.archivedAt).toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'})}</time></div>)}</div>:<p className="archive-empty">暂无归档</p>}</section>})}</div></div>}
 function Heatmap({items,open,onClose}){
   const [domain,setDomain]=useState(''),[activity,setActivity]=useState([]),[selected,setSelected]=useState('');
   useEffect(()=>{if(!open)return;const end=new Date(),start=new Date(end);start.setDate(end.getDate()-364);api('/api/activity?from='+dayKey(start)+'&to='+dayKey(end)+(domain?'&domain='+encodeURIComponent(domain):'')).then(setActivity).catch(()=>setActivity([]));},[open,domain]);
@@ -49,6 +50,7 @@ function App(){
   const [picker,setPicker]=useState('');
   const [heatmapOpen,setHeatmapOpen]=useState(false);
   const [aiOpen,setAiOpen]=useState(false);
+  const [archiveOpen,setArchiveOpen]=useState(false),[archived,setArchived]=useState([]),[archiveBusy,setArchiveBusy]=useState(false);
 
   const [layout,setLayout]=useState(readLayout);
   const board=useRef(null),beforePositions=useRef(null);
@@ -72,7 +74,7 @@ function App(){
   useEffect(()=>{try{localStorage.setItem('rafa-layout',JSON.stringify(layout));}catch{}},[layout]);
   const itemsRef=useRef(items);itemsRef.current=items;
   const draftRef=useRef(null);draftRef.current=draft;
-  useEffect(()=>{api('/api/auth/status').then(status=>{setAuthenticated(status.authenticated);if(status.authenticated)api('/api/entries').then(setItems).catch(e=>setError(e.message));}).catch(e=>setError(e.message)).finally(()=>setLoading(false));},[]);
+  useEffect(()=>{api('/api/auth/status').then(status=>{setAuthenticated(status.authenticated);if(status.authenticated){api('/api/entries').then(setItems).catch(e=>setError(e.message));api('/api/archive').then(setArchived).catch(e=>setError(e.message));}}).catch(e=>setError(e.message)).finally(()=>setLoading(false));},[]);
   useEffect(()=>{
     if(!textarea.current)return;
     textarea.current.style.height='0px';textarea.current.style.height=Math.max(25,textarea.current.scrollHeight)+'px';
@@ -86,6 +88,8 @@ function App(){
   },[draft,text,busy]);
   useEffect(()=>{const closeTransient=event=>{setMenu(null);if(!event.target.closest('.row-actions'))setConfirmDelete('');if(!event.target.closest('.heatmap-trigger,.heatmap-popover'))setHeatmapOpen(false);};document.addEventListener('pointerdown',closeTransient);return()=>document.removeEventListener('pointerdown',closeTransient);},[]);
   useEffect(()=>{const closeAi=event=>{if(!event.target.closest('.ai-orb,.ai-dock'))setAiOpen(false);};document.addEventListener('pointerdown',closeAi);return()=>document.removeEventListener('pointerdown',closeAi);},[]);
+  async function archiveAll(){if(archiveBusy)return;setArchiveBusy(true);setError('');try{const result=await api('/api/archive','POST');setItems(result.items);setArchived(await api('/api/archive'));setError(result.count?`已归档 ${result.count} 条`:'没有可归档的内容');}catch(e){setError(e.message);}finally{setArchiveBusy(false);}}
+  async function openArchive(){setArchiveOpen(true);try{setArchived(await api('/api/archive'));}catch(e){setError(e.message);}}
   function replaceItem(saved){applyItems(itemsRef.current.some(item=>item.id===saved.id)?itemsRef.current.map(item=>item.id===saved.id?saved:item):[...itemsRef.current,saved]);}
   async function login(event){event.preventDefault();if(!password.trim()||loggingIn)return;setLoggingIn(true);setError('');try{await api('/api/auth/login','POST',{password});setPassword('');setAuthenticated(true);setItems(await api('/api/entries'));}catch(e){setError(e.message);}finally{setLoggingIn(false);}}
   function close(){setDraft(null);setText('');setHint(null);}
@@ -313,7 +317,7 @@ function App(){
   if(authenticated===null||loading)return <div className="auth-screen"><div className="auth-brand"><img className="auth-cat" src="/rafa-cat.png" alt=""/><div className="auth-mark">Rafa<span>todo</span><i/></div></div><span className="auth-loading">正在打开…</span><Toast message={error} onClose={()=>setError('')}/></div>;
   if(!authenticated)return <div className="auth-screen"><form className="auth-form" onSubmit={login}><div className="auth-brand"><img className="auth-cat" src="/rafa-cat.png" alt=""/><div className="auth-mark">Rafa<span>todo</span><i/></div></div><div className="auth-input"><input id="password" type="password" autoFocus autoComplete="current-password" value={password} onChange={event=>setPassword(event.target.value)} aria-label="密码" placeholder="••••••" onKeyDown={event=>{if(event.key==='Enter')login(event);}}/></div></form><Toast message={error} onClose={()=>setError('')}/></div>;
   return <div className="app">
-    <header className="topbar"><a className="brand" href="/" aria-label="RafaTodo 首页"><img className="brand-cat" src="/rafa-cat.png" alt=""/>Rafa<span>todo</span><i/></a><div className="top-tools"><button className={'heatmap-trigger '+(heatmapOpen?'active':'')} onClick={()=>setHeatmapOpen(value=>!value)} aria-label="打开活动热力图" title="活动热力图"><ChartBar size={18}/></button></div><Heatmap items={items} open={heatmapOpen} onClose={()=>setHeatmapOpen(false)}/></header>
+    <header className="topbar"><a className="brand" href="/" aria-label="RafaTodo 首页"><img className="brand-cat" src="/rafa-cat.png" alt=""/>Rafa<span>todo</span><i/></a><div className="top-tools"><button className="archive-action" onClick={archiveAll} disabled={archiveBusy} aria-label="归档已完成和已移除内容" title="一键归档"><Archive size={17}/></button><button className="archive-view" onClick={openArchive} aria-label="查看归档" title="查看归档"><Archive size={18}/><span>{archived.length||''}</span></button><button className={'heatmap-trigger '+(heatmapOpen?'active':'')} onClick={()=>setHeatmapOpen(value=>!value)} aria-label="打开活动热力图" title="活动热力图"><ChartBar size={18}/></button></div><Heatmap items={items} open={heatmapOpen} onClose={()=>setHeatmapOpen(false)}/><ArchiveModal open={archiveOpen} items={archived} onClose={()=>setArchiveOpen(false)}/></header>
     <Toast message={error} onClose={()=>setError('')}/>
     <main ref={board} className="board" style={{'--work':layout.work+'%','--life':layout.life+'%'}}>{domains.map(domain=><section className={'column '+(drop?.domain===domain&&drop.placement==='end'?'drop-column':'')} key={domain} data-domain={domain} aria-label={domain}
       onDragOver={event=>{if(event.dataTransfer.types.includes('Files'))event.preventDefault();}}
