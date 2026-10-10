@@ -4,9 +4,9 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "dev": "concurrently -k \"node --watch server.js\" \"vite\"",
+    "dev": "concurrently -k \"node --env-file-if-exists=.env --watch server.js\" \"vite\"",
     "build": "vite build",
-    "start": "node server.js"
+    "start": "node --env-file-if-exists=.env server.js"
   },
   "keywords": [],
   "author": "",
