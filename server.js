@@ -30,6 +30,23 @@ app.get('/api/auth/status',(req,res)=>res.json({authenticated:Boolean(isAuthenti
 app.post('/api/auth/login',(req,res)=>{const stored=db.prepare('SELECT value FROM settings WHERE key=?').get('passwordHash')?.value;if(!stored)return res.status(503).json({error:'尚未设置登录密码，请运行 scripts/set-password.mjs'});const key=req.ip,now=Date.now(),failure=loginFailures.get(key);if(failure?.until>now&&failure.count>=5)return res.status(429).json({error:'尝试次数过多，请稍后再试'});if(typeof req.body.password!=='string'||!verifyPassword(req.body.password,stored)){const count=failure?.until>now?failure.count+1:1;loginFailures.set(key,{count,until:now+15*60*1000});return res.status(401).json({error:'密码错误'});}loginFailures.delete(key);const token=randomBytes(32).toString('hex');sessions.set(token,Date.now()+30*24*60*60*1000);setSessionCookie(res,token);res.json({authenticated:true});});
 app.post('/api/auth/logout',(req,res)=>{const token=cookie(req,'rafa_session');sessions.delete(token);res.setHeader('Set-Cookie','rafa_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0');res.json({authenticated:false});});
 const types=['todo','text','link','image','group','bullet','divider'];
+app.post('/api/ai/parse',async(req,res)=>{
+  const input=typeof req.body?.input==='string'?req.body.input.trim():'';
+  if(!input)return res.status(400).json({error:'请输入要录入的内容'});
+  const key=process.env.DEEPSEEK_API_KEY;
+  if(!key)return res.status(503).json({error:'尚未配置 DEEPSEEK_API_KEY'});
+  const system=`你是 RafaTodo 的录入助手。把用户输入拆成一条或多条待办事项，只返回 JSON，不要 Markdown。JSON 格式必须是 {"items":[{"title":"任务标题","content":"补充说明","domain":"Work|Life|Glean & Idea","tags":"标签1, 标签2","dueDate":"YYYY-MM-DD 或空字符串","priority":"normal|high|urgent"}]}。没有明确的信息就留空；不要编造截止日期。普通想法也转成一条 todo。`;
+  try{
+    const response=await fetch(process.env.DEEPSEEK_API_URL||'https://api.deepseek.com/chat/completions',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+key},body:JSON.stringify({model:process.env.DEEPSEEK_MODEL||'deepseek-flash',messages:[{role:'system',content:system},{role:'user',content:input}],thinking:{type:'enabled'},reasoning_effort:'high',stream:false})});
+    const payload=await response.json();
+    if(!response.ok)throw new Error(payload.error?.message||'DeepSeek 请求失败');
+    const raw=payload.choices?.[0]?.message?.content||'';
+    const parsed=JSON.parse(raw.replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,''));
+    const items=(Array.isArray(parsed)?parsed:parsed.items).filter(item=>item&&typeof item.title==='string'&&item.title.trim()).slice(0,20).map(item=>({title:item.title.trim().slice(0,1000),content:typeof item.content==='string'?item.content.trim().slice(0,50000):'',domain:domains.includes(item.domain)?item.domain:'Work',tags:typeof item.tags==='string'?item.tags.slice(0,500):'',dueDate:/^\d{4}-\d{2}-\d{2}$/.test(item.dueDate||'')?item.dueDate:'',priority:['normal','high','urgent'].includes(item.priority)?item.priority:'normal',type:'todo',status:'open',parentId:'',position:0}));
+    if(!items.length)throw new Error('AI 没有识别出可录入的任务');
+    res.json({items});
+  }catch(error){res.status(502).json({error:error.message||'AI 录入失败'});}
+});
 function activityDate(value=new Date()){return new Date(value).toISOString().slice(0,10);}
 function recordActivity(domain,counts,date=activityDate()){
   if(!domains.includes(domain))return;

@@ -1,6 +1,6 @@
 import React,{useState,useEffect,useLayoutEffect,useRef} from 'react';
 import {createRoot} from 'react-dom/client';
-import {Plus,ArrowUpRight,Check,TextT,LinkSimple,ImageSquare,DotsSixVertical,X,Trash,ArrowCounterClockwise,CaretDown,CaretRight,ChartBar} from '@phosphor-icons/react';
+import {Plus,ArrowUpRight,Check,TextT,LinkSimple,ImageSquare,DotsSixVertical,X,Trash,ArrowCounterClockwise,CaretDown,CaretRight,ChartBar,Sparkle} from '@phosphor-icons/react';
 import {domains,parseLine,toLine,treeRows,pasteLink} from './lib/entries.js';
 import './style.css';
 
@@ -33,6 +33,13 @@ function Heatmap({items,open,onClose}){
     {selected&&<div className="heatmap-detail"><div className="heatmap-detail-head"><strong>{selected}</strong><span>{(()=>{const row=map.get(selected);return row?`新增 ${row.created} · 完成 ${row.completed} · 更新 ${row.updated}`:'无活动';})()}</span></div>{selectedItems.length?<div className="heatmap-items">{selectedItems.map(item=><button key={item.id} onClick={()=>{onClose();document.querySelector(`[data-entry-id="${item.id}"]`)?.scrollIntoView({behavior:'smooth',block:'center'});}}>{titleOf(item)}</button>)}</div>:<span className="heatmap-empty">当天没有可回顾的条目</span>}</div>}
   </div>;
 }
+function AiCapture({open,onClose,onSaved}){
+  const [input,setInput]=useState(''),[items,setItems]=useState([]),[busy,setBusy]=useState(false),[error,setError]=useState('');
+  if(!open)return null;
+  async function parse(){if(!input.trim()||busy)return;setBusy(true);setError('');try{const result=await api('/api/ai/parse','POST',{input});setItems(result.items||[]);}catch(error){setError(error.message);}finally{setBusy(false);}}
+  async function save(){if(!items.length||busy)return;setBusy(true);setError('');try{for(const item of items){await api('/api/entries','POST',item);}onSaved();onClose();setInput('');setItems([]);}catch(error){setError(error.message);}finally{setBusy(false);}}
+  return <div className="ai-popover" role="dialog" aria-label="AI 录入" onPointerDown={event=>event.stopPropagation()}><div className="ai-head"><strong>AI 录入</strong><button onClick={onClose} aria-label="关闭 AI 录入">×</button></div><textarea autoFocus value={input} onChange={event=>setInput(event.target.value)} placeholder="例如：明天提醒我给小王确认合同，并整理本周的产品想法"/><button className="ai-parse" onClick={parse} disabled={busy||!input.trim()}>{busy?'处理中…':'识别内容'}</button>{error&&<p className="ai-error">{error}</p>}{items.length>0&&<div className="ai-preview"><div className="ai-preview-head"><span>识别出 {items.length} 条</span><button onClick={()=>setItems([])}>清空</button></div>{items.map((item,index)=><div className="ai-item" key={index}><strong>{item.title}</strong><span>{item.domain} · {item.priority}{item.dueDate&&' · '+item.dueDate}{item.tags&&' · #'+item.tags.replaceAll(', ', ' #')}</span>{item.content&&<small>{item.content}</small>}</div>)}<button className="ai-save" onClick={save} disabled={busy}>写入 Todo</button></div>}</div>;
+}
 function App(){
   const [items,setItems]=useState([]),[draft,setDraft]=useState(null),[text,setText]=useState('');
   const [busy,setBusy]=useState(false),[loading,setLoading]=useState(true),[error,setError]=useState('');
@@ -42,6 +49,7 @@ function App(){
   const saving=useRef(null);
   const [picker,setPicker]=useState('');
   const [heatmapOpen,setHeatmapOpen]=useState(false);
+  const [aiOpen,setAiOpen]=useState(false);
 
   const [layout,setLayout]=useState(readLayout);
   const board=useRef(null),beforePositions=useRef(null);
@@ -78,6 +86,7 @@ function App(){
     return ()=>document.removeEventListener('pointerdown',commit);
   },[draft,text,busy]);
   useEffect(()=>{const closeTransient=event=>{setMenu(null);if(!event.target.closest('.row-actions'))setConfirmDelete('');if(!event.target.closest('.heatmap-trigger,.heatmap-popover'))setHeatmapOpen(false);};document.addEventListener('pointerdown',closeTransient);return()=>document.removeEventListener('pointerdown',closeTransient);},[]);
+  useEffect(()=>{const closeAi=event=>{if(!event.target.closest('.ai-trigger,.ai-popover'))setAiOpen(false);};document.addEventListener('pointerdown',closeAi);return()=>document.removeEventListener('pointerdown',closeAi);},[]);
   function replaceItem(saved){applyItems(itemsRef.current.some(item=>item.id===saved.id)?itemsRef.current.map(item=>item.id===saved.id?saved:item):[...itemsRef.current,saved]);}
   async function login(event){event.preventDefault();if(!password.trim()||loggingIn)return;setLoggingIn(true);setError('');try{await api('/api/auth/login','POST',{password});setPassword('');setAuthenticated(true);setItems(await api('/api/entries'));}catch(e){setError(e.message);}finally{setLoggingIn(false);}}
   function close(){setDraft(null);setText('');setHint(null);}
@@ -305,7 +314,7 @@ function App(){
   if(authenticated===null||loading)return <div className="auth-screen"><div className="auth-brand"><img className="auth-cat" src="/rafa-cat.png" alt=""/><div className="auth-mark">Rafa<span>todo</span><i/></div></div><span className="auth-loading">正在打开…</span></div>;
   if(!authenticated)return <div className="auth-screen"><form className="auth-form" onSubmit={login}><div className="auth-brand"><img className="auth-cat" src="/rafa-cat.png" alt=""/><div className="auth-mark">Rafa<span>todo</span><i/></div></div><div className="auth-input"><input id="password" type="password" autoFocus autoComplete="current-password" value={password} onChange={event=>setPassword(event.target.value)} aria-label="密码" placeholder="••••••" onKeyDown={event=>{if(event.key==='Enter')login(event);}}/></div>{error&&<p className="auth-error">{error}</p>}</form></div>;
   return <div className="app">
-    <header className="topbar"><a className="brand" href="/" aria-label="RafaTodo 首页"><img className="brand-cat" src="/rafa-cat.png" alt=""/>Rafa<span>todo</span><i/></a><button className={'heatmap-trigger '+(heatmapOpen?'active':'')} onClick={()=>setHeatmapOpen(value=>!value)} aria-label="打开活动热力图" title="活动热力图"><ChartBar size={18}/></button><Heatmap items={items} open={heatmapOpen} onClose={()=>setHeatmapOpen(false)}/></header>
+    <header className="topbar"><a className="brand" href="/" aria-label="RafaTodo 首页"><img className="brand-cat" src="/rafa-cat.png" alt=""/>Rafa<span>todo</span><i/></a><div className="top-tools"><button className={'ai-trigger '+(aiOpen?'active':'')} onClick={()=>setAiOpen(value=>!value)} aria-label="打开 AI 录入" title="AI 录入"><Sparkle size={17}/></button><button className={'heatmap-trigger '+(heatmapOpen?'active':'')} onClick={()=>setHeatmapOpen(value=>!value)} aria-label="打开活动热力图" title="活动热力图"><ChartBar size={18}/></button></div><Heatmap items={items} open={heatmapOpen} onClose={()=>setHeatmapOpen(false)}/><AiCapture open={aiOpen} onClose={()=>setAiOpen(false)} onSaved={()=>api('/api/entries').then(setItems).catch(()=>{})}/></header>
     {error&&<div className="global-error" role="alert">{error}</div>}
     <main ref={board} className="board" style={{'--work':layout.work+'%','--life':layout.life+'%'}}>{domains.map(domain=><section className={'column '+(drop?.domain===domain&&drop.placement==='end'?'drop-column':'')} key={domain} data-domain={domain} aria-label={domain}
       onDragOver={event=>{if(event.dataTransfer.types.includes('Files'))event.preventDefault();}}

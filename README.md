@@ -64,6 +64,16 @@ pm2 startup
 curl -I http://127.0.0.1:3001
 ```
 
+如需启用 AI 录入，在启动 PM2 前配置 DeepSeek 环境变量（只放服务器环境，不要写入仓库）：
+
+```sh
+export DEEPSEEK_API_KEY='你的 DeepSeek API Key'
+export DEEPSEEK_MODEL='deepseek-flash'
+NODE_ENV=production pm2 start server.js --name rafatodo --update-env
+```
+
+页面右上角的闪光图标打开 AI 录入。输入一段自然语言后，服务端会识别一条或多条 Todo，先预览标题、领域、标签、截止日期和优先级，再点击“写入 Todo”。
+
 登录校验直接读取 `data/rafa.sqlite` 中的密码哈希。页面先显示密码页，登录状态使用 HttpOnly Cookie 保存。再次运行设置命令可修改密码，随后重启服务。
 
 ### 3. 用 Nginx 暴露域名
