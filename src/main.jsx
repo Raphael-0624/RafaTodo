@@ -20,7 +20,7 @@ function App(){
   const [items,setItems]=useState([]),[draft,setDraft]=useState(null),[text,setText]=useState('');
   const [busy,setBusy]=useState(false),[loading,setLoading]=useState(true),[error,setError]=useState('');
   const [authenticated,setAuthenticated]=useState(null),[password,setPassword]=useState(''),[loggingIn,setLoggingIn]=useState(false);
-  const [drop,setDrop]=useState(null),[dragging,setDragging]=useState(''),[hint,setHint]=useState(null),[choice,setChoice]=useState(0),[menu,setMenu]=useState(null);
+  const [drop,setDrop]=useState(null),[dragging,setDragging]=useState(''),[hint,setHint]=useState(null),[choice,setChoice]=useState(0),[menu,setMenu]=useState(null),[confirmDelete,setConfirmDelete]=useState('');
   const textarea=useRef(null),drag=useRef(null),currentDrop=useRef(null),suppressClick=useRef(false);
   const saving=useRef(null);
   const [picker,setPicker]=useState('');
@@ -59,7 +59,7 @@ function App(){
     document.addEventListener('pointerdown',commit);
     return ()=>document.removeEventListener('pointerdown',commit);
   },[draft,text,busy]);
-  useEffect(()=>{const closeMenu=()=>setMenu(null);document.addEventListener('pointerdown',closeMenu);return()=>document.removeEventListener('pointerdown',closeMenu);},[]);
+  useEffect(()=>{const closeTransient=event=>{setMenu(null);if(!event.target.closest('.row-actions'))setConfirmDelete('');};document.addEventListener('pointerdown',closeTransient);return()=>document.removeEventListener('pointerdown',closeTransient);},[]);
   function replaceItem(saved){applyItems(itemsRef.current.some(item=>item.id===saved.id)?itemsRef.current.map(item=>item.id===saved.id?saved:item):[...itemsRef.current,saved]);}
   async function login(event){event.preventDefault();if(!password.trim()||loggingIn)return;setLoggingIn(true);setError('');try{await api('/api/auth/login','POST',{password});setPassword('');setAuthenticated(true);setItems(await api('/api/entries'));}catch(e){setError(e.message);}finally{setLoggingIn(false);}}
   async function logout(){await api('/api/auth/logout','POST').catch(()=>{});setAuthenticated(false);setItems([]);close();}
@@ -104,7 +104,8 @@ function App(){
   }
   async function deleteItem(item){
     if(busy)return;
-    if(!window.confirm('永久删除“'+titleOf(item)+'”？子条目会保留。'))return;
+    if(confirmDelete!==item.id){setConfirmDelete(item.id);return;}
+    setConfirmDelete('');
     if(draft?.id===item.id)close();else if(draft&&!await save())return;
     setBusy(true);setError('');
     try{
@@ -269,7 +270,7 @@ function App(){
         </div>}
         <div className="row-actions">
           <button title={removed?'恢复条目':'取消条目'} aria-label={removed?'恢复条目':'取消条目'} disabled={busy} onClick={()=>updateStatus(item,removed?'open':'removed')}>{removed?<ArrowCounterClockwise size={14}/>:<X size={14}/>}</button>
-          <button title="永久删除" aria-label="永久删除条目" disabled={busy} onClick={()=>deleteItem(item)}><Trash size={14}/></button>
+          <button className={confirmDelete===item.id?'confirm-delete':''} title={confirmDelete===item.id?'再次点击确认删除':'永久删除'} aria-label={confirmDelete===item.id?'确认删除条目':'永久删除条目'} disabled={busy} onClick={()=>deleteItem(item)}>{confirmDelete===item.id?'确认删除':<Trash size={14}/>}</button>
         </div>
       </div>}
     </div>;

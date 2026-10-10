@@ -119,6 +119,8 @@ button:focus-visible,a:focus-visible,[role="button"]:focus-visible,textarea:focu
 .entry:hover .row-actions,.entry:focus-within .row-actions{opacity:1;pointer-events:auto}
 .row-actions button:hover{background:#e7ebe2;color:#485943}
 .row-actions button:last-child:hover{color:#b46552;background:#f4e9e3}
+.row-actions .confirm-delete{width:auto;padding:0 6px;color:#b46552;background:#f4e9e3;font-size:10px;white-space:nowrap}
+.row-actions .confirm-delete:hover{color:#fff;background:#b46552}
 .write-mark{margin-top:2px}
 @media(max-width:720px){.divider{display:none}.column:nth-child(1){border-right:0}.entry-title{line-height:20px}.row-actions{opacity:.55;pointer-events:auto}}
 @media(hover:none){.row-actions{opacity:.55;pointer-events:auto}}
