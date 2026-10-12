@@ -67,7 +67,7 @@ button:focus-visible,a:focus-visible,[role="button"]:focus-visible,textarea:focu
 .entry-note{font-size:12px;line-height:1.45;color:#8e978a;white-space:pre-wrap;overflow-wrap:anywhere}
 .entry-meta{display:flex;align-items:baseline;gap:2px 7px;flex-wrap:wrap;color:#9ca593;font-size:10px;line-height:1.5}
 .entry-meta:empty{display:none}
-.entry-meta .person{color:#768b73}
+.person-inline{color:#768b73;font-weight:560}.entry-meta .person{color:#768b73}
 .entry-meta .related-person{color:#9aa693}
 .entry-meta .tag{color:#8b9790}
 .entry-meta .high{color:#a37a31}

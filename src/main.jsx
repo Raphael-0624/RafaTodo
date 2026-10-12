@@ -11,7 +11,7 @@ async function api(url,method='GET',body){
   return data;
 }
 const titleOf=item=>item.title||item.content||item.url||'图片';
-function inline(value){return String(value).split(/(`[^`]+`|!?\[[^\]]+\]\(https?:\/\/[^\s)]+\)|==[^=]+==|\*\*[^*]+\*\*|~~[^~]+~~|\*[^*]+\*)/g).map((part,index)=>{const link=part.match(/^\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)$/);if(link)return <a key={index} className="markdown-link" href={link[2]} target="_blank" rel="noreferrer" onClick={event=>event.stopPropagation()}>{link[1]}<ArrowUpRight size={11}/></a>;if(part.startsWith('`'))return <code key={index}>{part.slice(1,-1)}</code>;if(part.startsWith('=='))return <mark key={index}>{part.slice(2,-2)}</mark>;if(part.startsWith('**'))return <strong key={index}>{part.slice(2,-2)}</strong>;if(part.startsWith('~~'))return <del key={index}>{part.slice(2,-2)}</del>;if(part.startsWith('*'))return <em key={index}>{part.slice(1,-1)}</em>;return part;});}
+function inline(value){return String(value).split(/(`[^`]+`|!?\[[^\]]+\]\(https?:\/\/[^\s)]+\)|==[^=]+==|\*\*[^*]+\*\*|~~[^~]+~~|\*[^*]+\*|@[\p{L}\p{N}_·.-]+)/gu).map((part,index)=>{const link=part.match(/^\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)$/);if(link)return <a key={index} className="markdown-link" href={link[2]} target="_blank" rel="noreferrer" onClick={event=>event.stopPropagation()}>{link[1]}<ArrowUpRight size={11}/></a>;if(part.startsWith('`'))return <code key={index}>{part.slice(1,-1)}</code>;if(part.startsWith('@'))return <span key={index} className="person-inline">{part}</span>;if(part.startsWith('=='))return <mark key={index}>{part.slice(2,-2)}</mark>;if(part.startsWith('**'))return <strong key={index}>{part.slice(2,-2)}</strong>;if(part.startsWith('~~'))return <del key={index}>{part.slice(2,-2)}</del>;if(part.startsWith('*'))return <em key={index}>{part.slice(1,-1)}</em>;return part;});}
 const editLine=(item,entries)=>toLine(item,entries,{hideTaskPrefix:true});
 const prefersReducedMotion=()=>window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 const clamp=value=>Math.min(75,Math.max(25,value));
@@ -290,8 +290,8 @@ function App(){
           {item.image&&<img className="thumb" src={item.image} alt={item.title||'条目图片'}/>}
           <span className="entry-meta">
             {item.priority==='urgent'&&<span className="urgent">!! 紧急</span>}{item.priority==='high'&&<span className="high">! 重要</span>}
-            {item.owner&&<span className="person">@{item.owner}</span>}
-            {item.people&&item.people.split(/[,，]\s*/).map(name=><span key={name} className="person related-person">@{name}</span>)}
+            {item.owner&&!item.title.includes('@'+item.owner)&&<span className="person">@{item.owner}</span>}
+            {item.people&&item.people.split(/[,，]\s*/).filter(name=>name&&!item.title.includes('@'+name)).map(name=><span key={name} className="person related-person">@{name}</span>)}
             {item.tags&&item.tags.split(/[,，]\s*/).map(tag=><span className="tag" key={tag}>#{tag}</span>)}
             {item.dueDate&&<span className={overdue?'overdue':'date'}>↗ {item.dueDate}</span>}
             {item.status==='waiting'&&<span>等待中</span>}{item.status==='doing'&&<span>进行中</span>}

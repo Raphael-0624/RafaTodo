@@ -27,7 +27,8 @@ export function parseLine(raw,base={},entries=[]){
   });
   consume(/(?:^|\s)stage:("[^"]*"|[^\s]+)(?=\s|$)/g,(_,value)=>{metadata.stage=value.replace(/^"|"$/g,'');});
   consume(/(?:^|\s)([\p{L}\p{N}_-]+)::("[^"]*"|[^\s]+)(?=\s|$)/gu,(_,key,value)=>{metadata.custom[key]=value.replace(/^"|"$/g,'');});
-  consume(/(?:^|\s)@("[^"]+"|[\p{L}\p{N}_·.-]+)/gu,(_,name)=>people.push(name.replace(/^"|"$/g,'')));
+  // Keep @people in the title so their original position remains visible.
+  text=text.replace(/(?:^|\s)@("[^"]+"|[\p{L}\p{N}_·.-]+)/gu,(match,name)=>{people.push(name.replace(/^"|"$/g,''));return match;});
   consume(/(?:^|\s)#([\p{L}\p{N}_/-]+)/gu,(_,tag)=>tags.push(tag));
   consume(/(?:^|\s)(!!|!重要|!!紧急|!)(?=\s|$)/g,(_,flag)=>{metadata.priority=flag.startsWith('!!')?'urgent':'high';});
   consume(/(?:^|\s)~(doing|waiting)(?=\s|$)/g,(_,value)=>{status=value;});
@@ -66,8 +67,8 @@ export function toLine(item,entries=[],{hideTaskPrefix=false}={}){
   else if(item.url)text=item.url;
   const prefix=item.type==='group'?'## ':item.type==='bullet'?'- ':hideTaskPrefix&&item.type==='todo'?'':!hideTaskPrefix&&item.status==='removed'?'- [-] ':item.type==='todo'?(item.status==='done'?'- [x] ':'- [ ] '):item.type==='text'?'> ':'';
   const tokens=[];
-  if(item.owner)tokens.push('@'+quote(item.owner));
-  if(item.people)tokens.push(...item.people.split(/[,，]\s*/).filter(Boolean).map(name=>'@'+quote(name)));
+  const peopleText=[item.owner,...(item.people||'').split(/[,，]\s*/)].filter(Boolean);
+  if(!peopleText.every(name=>text.includes('@'+name)))tokens.push(...peopleText.map(name=>'@'+quote(name)));
   if(item.tags)tokens.push(...item.tags.split(/[,，]\s*/).filter(Boolean).map(tag=>'#'+tag));
   if(item.priority==='high')tokens.push('!');
   if(item.priority==='urgent')tokens.push('!!');
