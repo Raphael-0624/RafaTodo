@@ -69,8 +69,8 @@ export function toLine(item,entries=[],{hideTaskPrefix=false}={}){
   if(item.owner)tokens.push('@'+quote(item.owner));
   if(item.people)tokens.push(...item.people.split(/[,，]\s*/).filter(Boolean).map(name=>'@'+quote(name)));
   if(item.tags)tokens.push(...item.tags.split(/[,，]\s*/).filter(Boolean).map(tag=>'#'+tag));
-  if(item.priority==='high')tokens.push('!重要');
-  if(item.priority==='urgent')tokens.push('!!紧急');
+  if(item.priority==='high')tokens.push('!');
+  if(item.priority==='urgent')tokens.push('!!');
   if(['doing','waiting'].includes(item.status))tokens.push('~'+item.status);
   if(item.type==='group'&&item.signature)tokens.push('sig:'+item.signature);
   if(item.type==='group'&&item.tone)tokens.push('tone:'+item.tone);
