@@ -30,6 +30,19 @@ app.get('/api/auth/status',(req,res)=>res.json({authenticated:Boolean(isAuthenti
 app.post('/api/auth/login',(req,res)=>{const stored=db.prepare('SELECT value FROM settings WHERE key=?').get('passwordHash')?.value;if(!stored)return res.status(503).json({error:'尚未设置登录密码，请运行 scripts/set-password.mjs'});const key=req.ip,now=Date.now(),failure=loginFailures.get(key);if(failure?.until>now&&failure.count>=5)return res.status(429).json({error:'尝试次数过多，请稍后再试'});if(typeof req.body.password!=='string'||!verifyPassword(req.body.password,stored)){const count=failure?.until>now?failure.count+1:1;loginFailures.set(key,{count,until:now+15*60*1000});return res.status(401).json({error:'密码错误'});}loginFailures.delete(key);const token=randomBytes(32).toString('hex');sessions.set(token,Date.now()+30*24*60*60*1000);setSessionCookie(res,token);res.json({authenticated:true});});
 app.post('/api/auth/logout',(req,res)=>{const token=cookie(req,'rafa_session');sessions.delete(token);res.setHeader('Set-Cookie','rafa_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0');res.json({authenticated:false});});
 const types=['todo','text','link','image','group','bullet','divider'];
+app.post('/api/link-preview',async(req,res)=>{
+  const url=typeof req.body?.url==='string'?req.body.url.trim():'';
+  if(!/^https?:\/\//i.test(url))return res.status(400).json({error:'链接必须使用 http 或 https'});
+  try{
+    const response=await fetch(url,{redirect:'follow',signal:AbortSignal.timeout(5000),headers:{'User-Agent':'RafaTodo/1.0'}});
+    const type=response.headers.get('content-type')||'';
+    if(!type.includes('text/html'))return res.json({title:''});
+    const html=(await response.text()).slice(0,512000);
+    const match=html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+    const title=(match?.[1]||'').replace(/<[^>]+>/g,' ').replace(/&amp;/g,'&').replace(/&quot;/g,'\"').replace(/&#39;/g,"'").replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/\s+/g,' ').trim().slice(0,200);
+    res.json({title});
+  }catch{res.json({title:''});}
+});
 app.post('/api/ai/parse',async(req,res)=>{
   const input=typeof req.body?.input==='string'?req.body.input.trim():'';
   if(!input)return res.status(400).json({error:'请输入要录入的内容'});
