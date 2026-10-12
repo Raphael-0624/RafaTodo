@@ -215,6 +215,14 @@ function App(){
     const caret=hint.start+value.length+2;setText(next);setHint(null);
     requestAnimationFrame(()=>{textarea.current?.focus();textarea.current?.setSelectionRange(caret,caret);});
   }
+  async function insertNextTask(){
+    if(!draft||busy||saving.current)return;
+    const saved=await save(false);
+    if(!saved||saved===true)return;
+    setDraft({domain:saved.domain,type:'todo',status:'open',title:'',content:'',parentId:saved.parentId||'',position:saved.position??0,insert:{targetId:saved.id,placement:'after'}});
+    setText('');setHint(null);
+    requestAnimationFrame(()=>textarea.current?.focus());
+  }
   async function indent(outdent){
     if(!draft)return;
     let item=draft;
@@ -251,6 +259,7 @@ function App(){
           onPaste={event=>{const file=Array.from(event.clipboardData.files).find(file=>file.type.startsWith('image/'));if(file){event.preventDefault();upload(file,draft.domain);return;}const result=pasteLink(text,event.target.selectionStart,event.target.selectionEnd,event.clipboardData.getData('text/plain'));if(result){event.preventDefault();setText(result.text);requestAnimationFrame(()=>{textarea.current?.focus();textarea.current?.setSelectionRange(result.caret,result.caret);});}}}
           onKeyDown={event=>{
             if(event.nativeEvent.isComposing||event.keyCode===229)return;
+            if((event.metaKey||event.ctrlKey)&&event.shiftKey&&event.key==='Enter'){event.preventDefault();insertNextTask();return;}
             if((event.metaKey||event.ctrlKey)&&['b','i','='].includes(event.key.toLowerCase())){event.preventDefault();const marker=event.key.toLowerCase()==='b'?'**':event.key.toLowerCase()==='i'?'*':'==';const start=event.target.selectionStart,end=event.target.selectionEnd;setText(text.slice(0,start)+marker+text.slice(start,end)+marker+text.slice(end));requestAnimationFrame(()=>{textarea.current?.focus();textarea.current?.setSelectionRange(start+marker.length,end+marker.length);});return;}
             if(event.key==='Escape'){event.preventDefault();if(hint)setHint(null);else close();return;}
             if(hint&&['ArrowDown','ArrowUp'].includes(event.key)){event.preventDefault();setChoice(previous=>(previous+(event.key==='ArrowDown'?1:-1)+hint.options.length)%hint.options.length);return;}
