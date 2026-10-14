@@ -11,7 +11,7 @@ async function api(url,method='GET',body){
   return data;
 }
 const titleOf=item=>item.title||item.content||item.url||'图片';
-function inline(value){return String(value).split(/(`[^`]+`|!?\[[^\]]+\]\(https?:\/\/[^\s)]+\)|==[^=]+==|\*\*[^*]+\*\*|~~[^~]+~~|\*[^*]+\*|@[\p{L}\p{N}_·.-]+)/gu).map((part,index)=>{const link=part.match(/^\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)$/);if(link)return <a key={index} className="markdown-link" href={link[2]} target="_blank" rel="noreferrer" onClick={event=>event.stopPropagation()}>{link[1]}<ArrowUpRight size={11}/></a>;if(part.startsWith('`'))return <code key={index}>{part.slice(1,-1)}</code>;if(part.startsWith('@'))return <span key={index} className="person-inline">{part}</span>;if(part.startsWith('=='))return <mark key={index}>{part.slice(2,-2)}</mark>;if(part.startsWith('**'))return <strong key={index}>{part.slice(2,-2)}</strong>;if(part.startsWith('~~'))return <del key={index}>{part.slice(2,-2)}</del>;if(part.startsWith('*'))return <em key={index}>{part.slice(1,-1)}</em>;return part;});}
+function inline(value,enableLinks=true){return String(value).split(/(`[^`]+`|!?\[[^\]]+\]\(https?:\/\/[^\s)]+\)|==[^=]+==|\*\*[^*]+\*\*|~~[^~]+~~|\*[^*]+\*|@[\p{L}\p{N}_·.-]+)/gu).map((part,index)=>{const link=part.match(/^\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)$/);if(link&&!enableLinks)return <span key={index} className="markdown-link">{link[1]}</span>;if(link)return <a key={index} className="markdown-link" href={link[2]} target="_blank" rel="noreferrer" onClick={event=>event.stopPropagation()}>{link[1]}<ArrowUpRight size={11}/></a>;if(part.startsWith('`'))return <code key={index}>{part.slice(1,-1)}</code>;if(part.startsWith('@'))return <span key={index} className="person-inline">{part}</span>;if(part.startsWith('=='))return <mark key={index}>{part.slice(2,-2)}</mark>;if(part.startsWith('**'))return <strong key={index}>{part.slice(2,-2)}</strong>;if(part.startsWith('~~'))return <del key={index}>{part.slice(2,-2)}</del>;if(part.startsWith('*'))return <em key={index}>{part.slice(1,-1)}</em>;return part;});}
 const editLine=(item,entries)=>toLine(item,entries,{hideTaskPrefix:true});
 const prefersReducedMotion=()=>window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 const clamp=value=>Math.min(75,Math.max(25,value));
@@ -95,8 +95,23 @@ function App(){
   }
   function feedback(id){
     if(prefersReducedMotion())return;
-    requestAnimationFrame(()=>{const node=[...board.current?.querySelectorAll('[data-entry-id]')||[]].find(node=>node.dataset.entryId===id)?.querySelector('.entry-read');node?.animate([{backgroundColor:'#eaf1e4'},{backgroundColor:'transparent'}],{duration:360,easing:'ease-out'});});
+    requestAnimationFrame(()=>{const node=[...board.current?.querySelectorAll('[data-entry-id]')||[]].find(node=>node.dataset.entryId===id)?.querySelector('.entry-read');node?.animate([{backgroundColor:'#eaf1e4'},{backgroundColor:'transparent'}],{duration:520,easing:'ease-out'});});
   }
+  async function locatePinned(item){
+    if(saving.current)await saving.current;
+    const entries=itemsRef.current,byId=new Map(entries.map(entry=>[entry.id,entry]));
+    const collapsed=[];let parent=byId.get(item.parentId);
+    while(parent){if(parent.collapsed)collapsed.push(parent);parent=byId.get(parent.parentId);}
+    if(collapsed.length){
+      try{const expanded=await Promise.all(collapsed.map(group=>api('/api/entries/'+group.id,'PUT',{...group,collapsed:false})));const patches=new Map(expanded.map(group=>[group.id,group]));applyItems(entries.map(entry=>patches.get(entry.id)||entry));await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));}
+      catch(error){setError(error.message);return;}
+    }
+    const node=board.current?.querySelector(`[data-entry-id="${item.id}"]`);
+    if(!node)return;
+    node.scrollIntoView({behavior:prefersReducedMotion()?'instant':'smooth',block:'center'});
+    if(!prefersReducedMotion())setTimeout(()=>{const read=node.querySelector('.entry-read');if(read)read.animate([{backgroundColor:'#c9e3c6'},{backgroundColor:getComputedStyle(read).backgroundColor}],{duration:1100,easing:'ease-out'});},300);
+  }
+
   useEffect(()=>{try{localStorage.setItem('rafa-layout',JSON.stringify(layout));}catch{}},[layout]);
   const itemsRef=useRef(items);itemsRef.current=items;
   const draftRef=useRef(null);draftRef.current=draft;
@@ -369,7 +384,7 @@ function App(){
       onDrop={event=>{const file=Array.from(event.dataTransfer.files).find(file=>file.type.startsWith('image/'));if(file){event.preventDefault();upload(file,domain);}}}>
       <div className="column-watermark" aria-hidden="true">{domain==='Glean & Idea'?<>GLEAN<span>& IDEA</span></>:domain.toUpperCase()}</div>
       <div className="column-head"><h1>{domain.toUpperCase()}</h1><span>{items.filter(item=>item.domain===domain&&item.type==='todo'&&!['done','removed'].includes(item.status)).length}</span><button className="column-archive" onClick={()=>archiveDomain(domain)} disabled={archiveBusy} aria-label={'归档 '+domain+' 已完成和已移除的内容'} title="归档本栏"><Archive size={16}/></button></div>
-      {items.some(item=>item.domain===domain&&item.pinnedAt)&&<div className="pinned-list" aria-label={domain+' 置顶条目'}>{items.filter(item=>item.domain===domain&&item.pinnedAt).sort((a,b)=>a.pinnedAt.localeCompare(b.pinnedAt)).map(item=><div className="pinned-item" key={item.id} onContextMenu={event=>{event.preventDefault();setMenu({x:event.clientX,y:event.clientY,item});}}><PushPin size={13} weight="fill"/><button className="pinned-title" onClick={()=>{open(item);requestAnimationFrame(()=>board.current?.querySelector(`[data-entry-id="${item.id}"]`)?.scrollIntoView({behavior:'smooth',block:'center'}));}} title={titleOf(item)}>{titleOf(item)}</button><button className="pinned-unpin" onClick={()=>togglePin(item)} aria-label={'取消置顶 '+titleOf(item)} title="取消置顶"><PushPin size={13} weight="fill"/></button></div>)}</div>}
+      {items.some(item=>item.domain===domain&&item.pinnedAt)&&<div className="pinned-list" aria-label={domain+' 置顶条目'}>{items.filter(item=>item.domain===domain&&item.pinnedAt).sort((a,b)=>a.pinnedAt.localeCompare(b.pinnedAt)).map(item=><div className="pinned-item" key={item.id} onContextMenu={event=>{event.preventDefault();setMenu({x:event.clientX,y:event.clientY,item});}}><PushPin size={13} weight="fill"/><button className="pinned-title" onClick={()=>locatePinned(item)} title={titleOf(item)}><span className="pinned-title-text">{inline(titleOf(item),false)}</span>{item.content&&<span className="pinned-note">{item.content.split('\n').map((line,index)=><span key={index}>{inline(line,false)}</span>)}</span>}<span className="pinned-meta">{item.priority==='urgent'?'!! 紧急':item.priority==='high'?'! 重要':''}{item.owner?' @'+item.owner:''}{item.tags?' '+item.tags.split(/[,，]\s*/).map(tag=>'#'+tag).join(' '):''}{item.dueDate?' 截止 '+item.dueDate:''}</span></button><button className="pinned-unpin" onClick={()=>togglePin(item)} aria-label={'取消置顶 '+titleOf(item)} title="取消置顶"><PushPin size={13} weight="fill"/></button></div>)}</div>}
       <div className="column-scroll">
       <div className="column-content">{loading?<div className="loading">加载中…</div>:renderTree(domain)}</div>
       <div className="add-row">{draft&&!draft.id&&!draft.insert&&!draft.parentId&&draft.domain===domain?editor():<button onClick={()=>open(null,domain)} aria-label={'在 '+domain+' 新增条目'}><Plus size={14}/><span>写一条…</span></button>}</div>

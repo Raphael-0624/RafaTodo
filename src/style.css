@@ -213,7 +213,7 @@ button:focus-visible,a:focus-visible,[role="button"]:focus-visible,textarea:focu
 .column-archive{margin-left:auto;color:#a2ad9f;padding:2px;line-height:0;border-radius:3px}
 .column-archive:hover{color:#438865;background:#eff3ed}
 @media(max-width:720px){.heatmap-popover{right:16px;top:58px}.heatmap-cells{gap:1px}.heatmap-weekdays{grid-template-rows:repeat(7,minmax(0,1fr));font-size:7px}.archive-backdrop{padding:16px 0}.archive-modal{max-height:calc(100dvh - 32px)}}
-.pinned-list{position:relative;z-index:3;flex:0 0 auto;margin:-6px 3px 10px;padding:5px 7px;background:#eef3ea;border-left:2px solid #7b9f75;border-radius:2px;max-height:120px;overflow:auto}
+.pinned-list{position:relative;z-index:3;flex:0 0 auto;margin:-6px 3px 10px;padding:5px 7px;background:#eef3ea;border-left:2px solid #7b9f75;border-radius:2px;max-height:min(45%,320px);overflow:auto}
 .pinned-item{display:flex;align-items:center;gap:7px;min-height:27px;color:#527350}
 .pinned-item+.pinned-item{border-top:1px solid #dae5d8}
 .pinned-title{flex:1;min-width:0;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:#3e593e;padding:4px 0}
@@ -225,3 +225,7 @@ button:focus-visible,a:focus-visible,[role="button"]:focus-visible,textarea:focu
 
 .entry.is-pinned>.entry-read{background:#f0f5ed;box-shadow:inset 2px 0 #84a67d}
 .entry.is-pinned>.entry-read:hover{background:#e9f1e5}
+.pinned-title{white-space:normal;overflow:visible;text-overflow:clip;line-height:1.4}
+.pinned-title-text,.pinned-note,.pinned-meta{display:block}
+.pinned-note{margin-top:2px;color:#71816f;font-size:11px;white-space:pre-wrap;overflow-wrap:anywhere}
+.pinned-meta{margin-top:3px;color:#879684;font-size:10px}
