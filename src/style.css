@@ -216,6 +216,8 @@ button:focus-visible,a:focus-visible,[role="button"]:focus-visible,textarea:focu
 .archive-item time{white-space:nowrap}
 .column-archive{margin-left:auto;color:#a2ad9f;padding:2px;line-height:0;border-radius:3px}
 .column-archive:hover{color:#438865;background:#eff3ed}
+.column-archive.confirm-archive{padding:5px 7px;background:#eaf1e4;color:#39744e;font-size:10px;line-height:1;white-space:nowrap}
+.column-archive.confirm-archive:hover{background:#438865;color:#fff}
 @media(max-width:720px){.heatmap-popover{right:16px;top:58px}.heatmap-cells{gap:1px}.heatmap-weekdays{grid-template-rows:repeat(7,minmax(0,1fr));font-size:7px}.archive-modal{padding:20px 18px}.archive-head{top:-20px}}
 .pinned-list{position:relative;z-index:3;flex:0 0 auto;margin:-6px 3px 10px;padding:5px 7px;background:#eef3ea;border-left:2px solid #7b9f75;border-radius:2px;max-height:min(45%,320px);overflow:auto}
 .pinned-item{display:flex;align-items:center;gap:7px;min-height:27px;color:#527350}
