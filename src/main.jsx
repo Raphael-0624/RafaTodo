@@ -1,6 +1,6 @@
 import React,{useState,useEffect,useLayoutEffect,useRef} from 'react';
 import {createRoot} from 'react-dom/client';
-import {Plus,ArrowUpRight,Check,TextT,LinkSimple,ImageSquare,DotsSixVertical,X,Trash,ArrowCounterClockwise,CaretDown,CaretRight,ChartBar,Sparkle,Archive} from '@phosphor-icons/react';
+import {Plus,ArrowUpRight,Check,TextT,LinkSimple,ImageSquare,DotsSixVertical,X,Trash,ArrowCounterClockwise,CaretDown,CaretRight,ChartBar,Sparkle,Archive,PushPin} from '@phosphor-icons/react';
 import {domains,parseLine,toLine,treeRows,pasteLink} from './lib/entries.js';
 import './style.css';
 
@@ -150,6 +150,16 @@ function App(){
     if(draft){const saved=await save();if(!saved)return;if(saved.id===item.id)item=saved;}
     setBusy(true);setError('');
     try{replaceItem(await api('/api/entries/'+item.id,'PUT',{...item,status}));feedback(item.id);}catch(e){setError(e.message);}finally{setBusy(false);}
+  }
+  async function togglePin(item){
+    setMenu(null);
+    if(busy)return;
+    if(draft&&!await save())return;
+    const current=itemsRef.current.find(entry=>entry.id===item.id)||item;
+    if(!current.pinnedAt&&itemsRef.current.filter(entry=>entry.domain===current.domain&&entry.pinnedAt).length>=3){setError('每个栏目最多置顶 3 条');return;}
+    setBusy(true);setError('');
+    try{replaceItem(await api('/api/entries/'+current.id,'PUT',{...current,pinnedAt:current.pinnedAt?'':new Date().toISOString()}));}
+    catch(e){setError(e.message);}finally{setBusy(false);}
   }
   async function configureGroup(item,patch){
     if(busy)return;
@@ -305,7 +315,7 @@ function App(){
     const statusDate=(removed?item.removedAt:done?item.completedAt:null);
     const statusCaption=statusDate?new Date(statusDate).toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'})+(removed?'取消':'完成'):'';
     const timeTitle=[['createdAt','创建'],['updatedAt','更新'],['completedAt','完成'],['removedAt','移除']].filter(([key])=>item[key]).map(([key,name])=>name+'：'+new Date(item[key]).toLocaleString('zh-CN',{hour12:false})).join('\n');
-    return <div key={item.id} className={'entry '+(done?'is-done ':'')+(removed?'is-removed ':'')+(group?'is-group ':'')+(divider?'is-divider ':'')+(item.url?'has-link ':'')+(dragging===item.id?'drag-source ':'')+(target?'drop-'+target:'')} data-entry-id={item.id} data-depth={depth} style={{'--depth':depth}} onPointerDown={event=>{if(event.target.closest('button,a,textarea,input,.row-actions,.group-controls'))return;beginDrag(event,item);}} onClick={event=>{if(event.target.closest('button,a,textarea,.entry-body,.row-actions,.group-controls')||editing)return;open(item);}} onContextMenu={event=>{if(event.target.closest('textarea'))return;event.preventDefault();setMenu({x:event.clientX, y:event.clientY,item});}}>
+    return <div key={item.id} className={'entry '+(done?'is-done ':'')+(removed?'is-removed ':'')+(group?'is-group ':'')+(divider?'is-divider ':'')+(item.url?'has-link ':'')+(item.pinnedAt?'is-pinned ':'')+(dragging===item.id?'drag-source ':'')+(target?'drop-'+target:'')} data-entry-id={item.id} data-depth={depth} style={{'--depth':depth}} onPointerDown={event=>{if(event.target.closest('button,a,textarea,input,.row-actions,.group-controls'))return;beginDrag(event,item);}} onClick={event=>{if(event.target.closest('button,a,textarea,.entry-body,.row-actions,.group-controls')||editing)return;open(item);}} onContextMenu={event=>{if(event.target.closest('textarea'))return;event.preventDefault();setMenu({x:event.clientX, y:event.clientY,item});}}>
       <button className="drag-handle" title="拖动排序；放在文字中间成为子条目" aria-label={'拖动 '+titleOf(item)} onPointerDown={event=>{event.stopPropagation();beginDrag(event,item);}}><DotsSixVertical size={14}/></button>
       {editing?editor():<div className="entry-read">
         {group?<button className={'group-toggle '+(item.collapsed?'collapsed':'')} aria-label={item.collapsed?'展开分组':'收起分组'} aria-expanded={!item.collapsed} onClick={()=>configureGroup(item,{collapsed:!item.collapsed})}><CaretDown size={15}/></button>:divider?<span className="kind-mark">—</span>:item.type==='todo'?<button className={'checkbox '+(done?'checked':'')} aria-label={done?'重新打开任务':'完成任务'} onClick={()=>updateStatus(item)} disabled={busy}>{done&&<Check size={11} weight="bold"/>}{removed&&<span>−</span>}</button>:<span className="kind-mark">{item.type==='text'?<TextT size={15}/>:item.type==='link'?<LinkSimple size={15}/>:item.type==='bullet'?<span>•</span>:<ImageSquare size={15}/>}</span>}
@@ -332,6 +342,7 @@ function App(){
           {picker===item.id&&<div className="group-picker"><div>{['◦','📌','📝','🚀','💡','🌿','🏠','💼'].map(signature=><button key={signature} aria-label={'图标 '+signature} onClick={()=>{configureGroup(item,{signature});setPicker('');}}>{signature}</button>)}</div><div>{['sage','sand','blue','rose','none'].map(tone=><button className={'tone-swatch tone-'+tone} key={tone} aria-label={'底色 '+tone} onClick={()=>{configureGroup(item,{tone});setPicker('');}}/>)}</div></div>}
         </div>}
         <div className="row-actions">
+          <button className={'pin-action '+(item.pinnedAt?'is-pinned':'')} title={item.pinnedAt?'取消置顶':'置顶'} aria-label={item.pinnedAt?'取消置顶':'置顶'} disabled={busy} onClick={()=>togglePin(item)}><PushPin size={14} weight={item.pinnedAt?'fill':'regular'}/></button>
           <button title={removed?'恢复条目':'取消条目'} aria-label={removed?'恢复条目':'取消条目'} disabled={busy} onClick={()=>updateStatus(item,removed?'open':'removed')}>{removed?<ArrowCounterClockwise size={14}/>:<X size={14}/>}</button>
           <button className={confirmDelete===item.id?'confirm-delete':''} title={confirmDelete===item.id?'再次点击确认删除':'永久删除'} aria-label={confirmDelete===item.id?'确认删除条目':'永久删除条目'} disabled={busy} onClick={()=>deleteItem(item)}>{confirmDelete===item.id?'确认删除':<Trash size={14}/>}</button>
         </div>
@@ -358,6 +369,7 @@ function App(){
       onDrop={event=>{const file=Array.from(event.dataTransfer.files).find(file=>file.type.startsWith('image/'));if(file){event.preventDefault();upload(file,domain);}}}>
       <div className="column-watermark" aria-hidden="true">{domain==='Glean & Idea'?<>GLEAN<span>& IDEA</span></>:domain.toUpperCase()}</div>
       <div className="column-head"><h1>{domain.toUpperCase()}</h1><span>{items.filter(item=>item.domain===domain&&item.type==='todo'&&!['done','removed'].includes(item.status)).length}</span><button className="column-archive" onClick={()=>archiveDomain(domain)} disabled={archiveBusy} aria-label={'归档 '+domain+' 已完成和已移除的内容'} title="归档本栏"><Archive size={16}/></button></div>
+      {items.some(item=>item.domain===domain&&item.pinnedAt)&&<div className="pinned-list" aria-label={domain+' 置顶条目'}>{items.filter(item=>item.domain===domain&&item.pinnedAt).sort((a,b)=>a.pinnedAt.localeCompare(b.pinnedAt)).map(item=><div className="pinned-item" key={item.id} onContextMenu={event=>{event.preventDefault();setMenu({x:event.clientX,y:event.clientY,item});}}><PushPin size={13} weight="fill"/><button className="pinned-title" onClick={()=>{open(item);requestAnimationFrame(()=>board.current?.querySelector(`[data-entry-id="${item.id}"]`)?.scrollIntoView({behavior:'smooth',block:'center'}));}} title={titleOf(item)}>{titleOf(item)}</button><button className="pinned-unpin" onClick={()=>togglePin(item)} aria-label={'取消置顶 '+titleOf(item)} title="取消置顶"><PushPin size={13} weight="fill"/></button></div>)}</div>}
       <div className="column-scroll">
       <div className="column-content">{loading?<div className="loading">加载中…</div>:renderTree(domain)}</div>
       <div className="add-row">{draft&&!draft.id&&!draft.insert&&!draft.parentId&&draft.domain===domain?editor():<button onClick={()=>open(null,domain)} aria-label={'在 '+domain+' 新增条目'}><Plus size={14}/><span>写一条…</span></button>}</div>
@@ -367,6 +379,7 @@ function App(){
     <AiCapture open={aiOpen} onOpen={()=>setAiOpen(true)} onClose={()=>setAiOpen(false)} onError={message=>setError(message)} onSaved={saved=>{setItems(previous=>[...previous,saved]);requestAnimationFrame(()=>requestAnimationFrame(()=>{const node=document.querySelector(`[data-entry-id="${saved.id}"]`);node?.scrollIntoView({behavior:'smooth',block:'center'});const read=node?.querySelector('.entry-read');if(read&&!prefersReducedMotion())read.animate([{backgroundColor:'#dcefd9'},{backgroundColor:'#dcefd9'},{backgroundColor:'transparent'}],{duration:1200,easing:'ease-out'});}));}}/>
     {menu&&<div className="context-menu" style={{left:Math.min(menu.x,window.innerWidth-190),top:Math.min(menu.y,window.innerHeight-180)}} onPointerDown={event=>event.stopPropagation()}>
       <button onClick={()=>insertNear(menu.item,'before','group')}>在上方插入标题</button><button onClick={()=>insertNear(menu.item,'after','group')}>在下方插入标题</button>
+      <button onClick={()=>togglePin(menu.item)}>{menu.item.pinnedAt?'取消 PIN':'PIN 置顶'}</button>
       <button onClick={()=>insertNear(menu.item,'after','todo')}>插入任务</button><button onClick={()=>{setMenu(null);open(null,menu.item.domain,menu.item.id);}}>插入子任务</button>
     </div>}
   </div>;
