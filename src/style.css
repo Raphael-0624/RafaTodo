@@ -178,7 +178,7 @@ button:focus-visible,a:focus-visible,[role="button"]:focus-visible,textarea:focu
 .group-controls{display:flex;align-items:center;gap:5px;position:relative;flex:0 0 auto;font-size:11px;color:#8b9783}
 .group-controls>button{padding:2px;display:grid;place-items:center;min-width:18px;height:21px}
 .group-count{font-size:10px;font-variant-numeric:tabular-nums;white-space:nowrap}
-.group-picker{position:absolute;right:0;top:26px;z-index:8;padding:8px;background:#fcfcfa;box-shadow:0 4px 18px #30402a18;border:1px solid #dfe5d9;border-radius:5px;min-width:170px}
+.group-picker{position:absolute;left:0;top:27px;z-index:8;padding:8px;background:#fcfcfa;box-shadow:0 4px 18px #30402a18;border:1px solid #dfe5d9;border-radius:5px;min-width:170px}
 .group-picker>div{display:flex;gap:4px;flex-wrap:wrap;margin:3px 0}.group-picker button{width:27px;height:27px;padding:2px;border-radius:3px}.group-picker button:hover{background:#e7edde}
 .group-picker .tone-swatch{background:var(--group-bg);border:1px solid #cdd7c6;width:22px;height:22px}
 .group-children{padding:2px 0 3px 20px}
@@ -235,3 +235,6 @@ button:focus-visible,a:focus-visible,[role="button"]:focus-visible,textarea:focu
 .pinned-meta{margin-top:3px;color:#879684;font-size:10px}
 
 .heatmap-tooltip{position:fixed;z-index:50;min-width:150px;max-width:min(260px,calc(100vw - 16px));display:flex;flex-direction:column;gap:4px;padding:9px 11px;border-radius:4px;background:#202820;color:#fff;box-shadow:0 6px 20px #17221830;font-size:11px;line-height:1.4;pointer-events:none;white-space:nowrap}.heatmap-tooltip strong{font-size:11px;font-weight:650;margin-bottom:2px}
+
+.group-signature{flex:0 0 21px;width:21px;height:21px;padding:1px;display:grid;place-items:center;border-radius:3px;color:#526b4e;font-size:16px;line-height:1}.group-signature:hover,.group-signature:focus-visible{background:#dfe9d9}
+.is-group .entry-read{gap:6px}
