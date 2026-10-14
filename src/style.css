@@ -97,7 +97,7 @@ button:focus-visible,a:focus-visible,[role="button"]:focus-visible,textarea:focu
 .drop-after::before{bottom:0}
 .drop-inside>.entry-read{background:#eaf1e4;outline:1px dashed #83a274}
 .drop-column .add-row{border-bottom:2px solid #438865}
-.drag-caption{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#2f4934;color:white;padding:9px 15px;border-radius:4px;font-size:11px;pointer-events:none;z-index:10;box-shadow:0 4px 14px #263c3020}
+.drag-caption{position:fixed;top:22px;left:50%;transform:translateX(-50%);background:#2f4934;color:white;padding:9px 15px;border-radius:4px;font-size:11px;pointer-events:none;z-index:60;box-shadow:0 4px 14px #263c3020}
 .add-row{margin-top:9px}
 .add-row>button{display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:7px 4px;min-height:34px;color:#b1b9aa;font-size:11px}
 .add-row>button:hover{color:#438865}
