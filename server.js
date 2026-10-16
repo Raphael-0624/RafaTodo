@@ -48,14 +48,14 @@ app.post('/api/ai/parse',async(req,res)=>{
   if(!input)return res.status(400).json({error:'请输入要录入的内容'});
   const key=process.env.DEEPSEEK_API_KEY;
   if(!key)return res.status(503).json({error:'尚未配置 DEEPSEEK_API_KEY'});
-  const system=`你是 RafaTodo 的录入助手。把用户输入拆成一条或多条待办事项，只返回 JSON，不要 Markdown。JSON 格式必须是 {"items":[{"title":"任务标题","content":"补充说明","domain":"Work|Life|Glean & Idea","tags":"标签1, 标签2","dueDate":"YYYY-MM-DD 或空字符串","priority":"normal|high|urgent"}]}。没有明确的信息就留空；不要编造截止日期。普通想法也转成一条 todo。`;
+  const system=`你是 RafaTodo 的录入助手。把用户输入拆成一条或多条待办事项，只返回 JSON，不要 Markdown。JSON 格式必须是 {"items":[{"title":"任务标题","content":"完整补充说明","domain":"Work|Life|Glean & Idea","owner":"负责人或空字符串","people":"其他参与人，用逗号分隔或空字符串","tags":"标签，用逗号分隔","dueDate":"YYYY-MM-DD 或空字符串","planDate":"YYYY-MM-DD 或空字符串","followupDate":"YYYY-MM-DD 或空字符串","stage":"阶段或空字符串","priority":"normal|high|urgent"}]}。没有明确的信息就留空；不要编造日期、负责人或状态。普通想法也转成一条 todo。`;
   try{
     const response=await fetch(process.env.DEEPSEEK_API_URL||'https://api.deepseek.com/chat/completions',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+key},body:JSON.stringify({model:process.env.DEEPSEEK_MODEL||'deepseek-flash',messages:[{role:'system',content:system},{role:'user',content:input}],thinking:{type:'enabled'},reasoning_effort:'high',stream:false})});
     const payload=await response.json();
     if(!response.ok)throw new Error(payload.error?.message||'DeepSeek 请求失败');
     const raw=payload.choices?.[0]?.message?.content||'';
     const parsed=JSON.parse(raw.replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,''));
-    const items=(Array.isArray(parsed)?parsed:parsed.items).filter(item=>item&&typeof item.title==='string'&&item.title.trim()).slice(0,20).map(item=>({title:item.title.trim().slice(0,1000),content:typeof item.content==='string'?item.content.trim().slice(0,50000):'',domain:domains.includes(item.domain)?item.domain:'Work',tags:typeof item.tags==='string'?item.tags.slice(0,500):'',dueDate:/^\d{4}-\d{2}-\d{2}$/.test(item.dueDate||'')?item.dueDate:'',priority:['normal','high','urgent'].includes(item.priority)?item.priority:'normal',type:'todo',status:'open',parentId:''}));
+    const items=(Array.isArray(parsed)?parsed:parsed.items).filter(item=>item&&typeof item.title==='string'&&item.title.trim()).slice(0,20).map(item=>({title:item.title.trim().slice(0,1000),content:typeof item.content==='string'?item.content.trim().slice(0,50000):'',domain:domains.includes(item.domain)?item.domain:'Work',owner:typeof item.owner==='string'?item.owner.trim().slice(0,100):'',people:typeof item.people==='string'?item.people.trim().slice(0,500):'',tags:typeof item.tags==='string'?item.tags.slice(0,500):'',dueDate:/^\d{4}-\d{2}-\d{2}$/.test(item.dueDate||'')?item.dueDate:'',planDate:/^\d{4}-\d{2}-\d{2}$/.test(item.planDate||'')?item.planDate:'',followupDate:/^\d{4}-\d{2}-\d{2}$/.test(item.followupDate||'')?item.followupDate:'',stage:typeof item.stage==='string'?item.stage.trim().slice(0,100):'',priority:['normal','high','urgent'].includes(item.priority)?item.priority:'normal',type:'todo',status:'open',parentId:''}));
     if(!items.length)throw new Error('AI 没有识别出可录入的任务');
     res.json({items});
   }catch(error){res.status(502).json({error:error.message||'AI 录入失败'});}

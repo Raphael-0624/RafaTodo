@@ -1,6 +1,6 @@
 import React,{useState,useEffect,useLayoutEffect,useRef} from 'react';
 import {createRoot} from 'react-dom/client';
-import {Plus,ArrowUpRight,Check,TextT,LinkSimple,ImageSquare,DotsSixVertical,X,Trash,ArrowCounterClockwise,CaretDown,CaretRight,ChartBar,Sparkle,Archive,PushPin} from '@phosphor-icons/react';
+import {Plus,ArrowUpRight,Check,TextT,LinkSimple,ImageSquare,DotsSixVertical,X,Trash,ArrowCounterClockwise,CaretDown,CaretRight,ChartBar,Archive,PushPin,Target,MagicWand} from '@phosphor-icons/react';
 import {domains,parseLine,toLine,treeRows,pasteLink} from './lib/entries.js';
 import './style.css';
 
@@ -17,6 +17,7 @@ const prefersReducedMotion=()=>window.matchMedia('(prefers-reduced-motion: reduc
 const clamp=value=>Math.min(75,Math.max(25,value));
 function readLayout(){try{const value=JSON.parse(localStorage.getItem('rafa-layout'));return {work:clamp(Number(value?.work)||50),life:clamp(Number(value?.life)||50)};}catch{return {work:50,life:50};}}
 const dayKey=value=>{const date=new Date(value);return Number.isNaN(date.getTime())?'':date.toLocaleDateString('en-CA');};
+function readStored(key,fallback){try{const value=localStorage.getItem(key);return value===null?fallback:JSON.parse(value);}catch{return fallback;}}
 function Toast({message,onClose}){useEffect(()=>{if(!message)return;const timer=setTimeout(onClose,3600);return()=>clearTimeout(timer);},[message,onClose]);if(!message)return null;return <div className="toast" role="alert" onClick={onClose}>{message}</div>}
 function ArchiveModal({open,items,onClose}){
   if(!open)return null;
@@ -61,12 +62,6 @@ function Heatmap({items,open,onClose}){
     {selected&&<div className="heatmap-detail"><div className="heatmap-detail-head"><strong>{selected}</strong><span>{detail(selected).join(' · ')||'无活动'}</span></div>{selectedItems.length?<div className="heatmap-items">{selectedItems.map(item=><button key={item.id} onClick={()=>{onClose();document.querySelector(`[data-entry-id="${item.id}"]`)?.scrollIntoView({behavior:'smooth',block:'center'});}}>{titleOf(item)}</button>)}</div>:<span className="heatmap-empty">当天没有可回顾的条目</span>}</div>}
   </div>;
 }
-function AiCapture({open,onOpen,onClose,onSaved,onError}){
-  const [input,setInput]=useState(''),[busy,setBusy]=useState(false),[phase,setPhase]=useState('');
-  async function submit(){if(!input.trim()||busy)return;setBusy(true);setPhase('正在理解…');try{await new Promise(resolve=>setTimeout(resolve,420));setPhase('正在拆分内容…');const result=await api('/api/ai/parse','POST',{input});const parsed=result.items||[];setPhase(parsed.length>1?'正在依次写入…':'正在写入…');for(const item of parsed){const saved=await api('/api/entries','POST',item);onSaved(saved);await new Promise(resolve=>setTimeout(resolve,420));}setPhase(parsed.length?`已添加 ${parsed.length} 条`:'没有识别出任务');if(parsed.length)setTimeout(()=>{setInput('');onClose();setPhase('');},850);}catch(error){onError(error.message);setPhase('');}finally{setBusy(false);}}
-  if(!open)return <button className="ai-orb" onMouseEnter={onOpen} onClick={onOpen} aria-label="打开 AI 录入" title="AI 录入"><Sparkle size={18}/></button>;
-  return <div className="ai-dock" role="dialog" aria-label="AI 录入" onPointerDown={event=>event.stopPropagation()} onMouseLeave={()=>{if(!busy&&!input)onClose();}}><div className="ai-orb ai-orb-small"><Sparkle size={17}/></div><textarea autoFocus rows="1" value={input} disabled={busy} onChange={event=>setInput(event.target.value)} onKeyDown={event=>{if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();submit();}}} placeholder={phase||'写下你想记录的事情，回车录入'}/>{busy&&<span className="ai-thinking" aria-live="polite">{phase}</span>}<button className="ai-close" onClick={onClose} aria-label="关闭 AI 录入">×</button></div>;
-}
 function App(){
   const [items,setItems]=useState([]),[draft,setDraft]=useState(null),[text,setText]=useState('');
   const [busy,setBusy]=useState(false),[loading,setLoading]=useState(true),[error,setError]=useState('');
@@ -76,9 +71,11 @@ function App(){
   const saving=useRef(null);
   const [picker,setPicker]=useState('');
   const [heatmapOpen,setHeatmapOpen]=useState(false);
-  const [aiOpen,setAiOpen]=useState(false);
   const [archiveOpen,setArchiveOpen]=useState(false),[archived,setArchived]=useState([]),[archiveBusy,setArchiveBusy]=useState(false);
   const [zen,setZen]=useState(null),[zenNow,setZenNow]=useState(Date.now()),[zenConfirm,setZenConfirm]=useState('');
+  const [inboxText,setInboxText]=useState(()=>readStored('rafa-inbox-text','')),[inboxBatches,setInboxBatches]=useState(()=>readStored('rafa-inbox-batches',[])),[inboxBusy,setInboxBusy]=useState(false),[inboxAdopting,setInboxAdopting]=useState(''),[inboxPhase,setInboxPhase]=useState(''),[inboxOpen,setInboxOpen]=useState(false);
+  const [currentTaskId,setCurrentTaskId]=useState(()=>readStored('rafa-current-task',''));
+  const autoProcessed=useRef(readStored('rafa-inbox-auto-source',''));
 
   const [layout,setLayout]=useState(readLayout);
   const board=useRef(null),beforePositions=useRef(null);
@@ -115,10 +112,15 @@ function App(){
   }
 
   useEffect(()=>{try{localStorage.setItem('rafa-layout',JSON.stringify(layout));}catch{}},[layout]);
+  useEffect(()=>{try{localStorage.setItem('rafa-inbox-text',JSON.stringify(inboxText));}catch{}},[inboxText]);
+  useEffect(()=>{try{localStorage.setItem('rafa-inbox-batches',JSON.stringify(inboxBatches));}catch{}},[inboxBatches]);
+  useEffect(()=>{try{localStorage.setItem('rafa-current-task',JSON.stringify(currentTaskId));}catch{}},[currentTaskId]);
+  useEffect(()=>{if(!inboxText.trim()||inboxBusy)return;const source=inboxText.trim();if(source===autoProcessed.current)return;const timer=setTimeout(()=>runInboxAI(source),60000);return()=>clearTimeout(timer);},[inboxText,inboxBusy]);
+  useEffect(()=>{const item=items.find(entry=>entry.id===currentTaskId);if(item&&['done','removed'].includes(item.status))setCurrentTaskId('');},[items,currentTaskId]);
   const itemsRef=useRef(items);itemsRef.current=items;
   useEffect(()=>{if(!zen)return;const timer=setInterval(()=>setZenNow(Date.now()),1000);return()=>clearInterval(timer);},[zen]);
   useEffect(()=>{if(!zen)return;const onKeyDown=event=>{if(event.key==='Escape'){event.preventDefault();setZenConfirm('hold');}};document.addEventListener('keydown',onKeyDown);return()=>document.removeEventListener('keydown',onKeyDown);},[zen]);
-  function startZen(item){setMenu(null);setZen({id:item.id,startedAt:Date.now()});setZenNow(Date.now());setZenConfirm('');}
+  function startZen(item){setMenu(null);if(item.type==='todo')setCurrentTaskId(item.id);setZen({id:item.id,startedAt:Date.now()});setZenNow(Date.now());setZenConfirm('');}
   function zenDuration(milliseconds){const seconds=Math.max(0,Math.floor(milliseconds/1000)),hours=Math.floor(seconds/3600),minutes=Math.floor(seconds%3600/60),rest=seconds%60;return (hours?hours+'时':'')+(minutes?minutes+'分':'')+rest+'秒';}
   function zenClock(milliseconds){const seconds=Math.max(0,Math.floor(milliseconds/1000)),hours=Math.floor(seconds/3600),minutes=Math.floor(seconds%3600/60),rest=seconds%60;return hours?[hours,minutes,rest].map(value=>String(value).padStart(2,'0')).join(':'):[minutes,rest].map(value=>String(value).padStart(2,'0')).join(':');}
   function zenTree(item){const byParent=new Map();for(const entry of itemsRef.current){if(!byParent.has(entry.parentId||''))byParent.set(entry.parentId||'',[]);byParent.get(entry.parentId||'').push(entry);}const result=[];function visit(entry,depth){result.push({item:entry,depth});for(const child of byParent.get(entry.id)||[])visit(child,depth+1);}visit(item,0);return result;}
@@ -143,6 +145,7 @@ function App(){
         updates.set(root.id,{...root,content:[root.content,record].filter(Boolean).join('\n')});
       }
       for(const [id,value] of updates)replaceItem(await api('/api/entries/'+id,'PUT',value));
+      if(action==='done'&&currentTaskId===root.id)setCurrentTaskId('');
       setZen(null);setZenConfirm('');
     }catch(error){setError(error.message);}finally{setBusy(false);}
   }
@@ -160,10 +163,31 @@ function App(){
     return ()=>document.removeEventListener('pointerdown',commit);
   },[draft,text,busy]);
   useEffect(()=>{const closeTransient=event=>{setMenu(null);if(!event.target.closest('.row-actions'))setConfirmDelete('');if(!event.target.closest('.column-archive'))setConfirmArchive('');if(!event.target.closest('.heatmap-trigger,.heatmap-popover'))setHeatmapOpen(false);};document.addEventListener('pointerdown',closeTransient);return()=>document.removeEventListener('pointerdown',closeTransient);},[]);
-  useEffect(()=>{const closeAi=event=>{if(!event.target.closest('.ai-orb,.ai-dock'))setAiOpen(false);};document.addEventListener('pointerdown',closeAi);return()=>document.removeEventListener('pointerdown',closeAi);},[]);
-  async function archiveDomain(domain){if(archiveBusy)return;if(confirmArchive!==domain){setConfirmArchive(domain);return;}setConfirmArchive('');setArchiveBusy(true);setError('');try{const result=await api('/api/archive','POST',{domain});setItems(result.items);setArchived(await api('/api/archive'));setError(result.count?`已归档 ${result.count} 条`:'没有可归档的内容');}catch(e){setError(e.message);}finally{setArchiveBusy(false);}}
+  async function archiveDomain(domain){if(archiveBusy)return;if(confirmArchive!==domain){setConfirmArchive(domain);return;}setConfirmArchive('');setArchiveBusy(true);setError('');try{const result=await api('/api/archive','POST',{domain});setItems(result.items);if(!result.items.some(item=>item.id===currentTaskId))setCurrentTaskId('');setArchived(await api('/api/archive'));setError(result.count?`已归档 ${result.count} 条`:'没有可归档的内容');}catch(e){setError(e.message);}finally{setArchiveBusy(false);}}
   async function openArchive(){setArchiveOpen(true);try{setArchived(await api('/api/archive'));}catch(e){setError(e.message);}}
   function replaceItem(saved){applyItems(itemsRef.current.some(item=>item.id===saved.id)?itemsRef.current.map(item=>item.id===saved.id?saved:item):[...itemsRef.current,saved]);}
+  function setCurrentTask(item){setCurrentTaskId(currentTaskId===item.id?'':item.id);}
+  function updateInboxDraft(batchId,draftId,patch){setInboxBatches(previous=>previous.map(batch=>batch.id!==batchId?batch:{...batch,drafts:batch.drafts.map(draft=>draft.id===draftId?{...draft,...patch}:draft)}));}
+  async function runInboxAI(source=inboxText.trim()){
+    if(!source||inboxBusy)return;
+    setInboxBusy(true);setInboxPhase('正在整理');setError('');
+    try{
+      const result=await api('/api/ai/parse','POST',{input:source});
+      const drafts=(result.items||[]).map(item=>({...item,id:crypto.randomUUID(),decision:'pending'}));
+      autoProcessed.current=source;try{localStorage.setItem('rafa-inbox-auto-source',JSON.stringify(source));}catch{}
+      if(!drafts.length){setInboxPhase('没有识别出任务');return;}
+      const batch={id:crypto.randomUUID(),source,createdAt:new Date().toISOString(),drafts};
+      setInboxBatches(previous=>[batch,...previous]);setInboxOpen(true);setInboxPhase(`整理出 ${drafts.length} 条`);
+      setTimeout(()=>setInboxPhase(''),3000);
+    }catch(error){autoProcessed.current=source;try{localStorage.setItem('rafa-inbox-auto-source',JSON.stringify(source));}catch{}setError(error.message);setInboxPhase('整理失败，可点击按钮重试');}
+    finally{setInboxBusy(false);}
+  }
+  async function adoptInboxDraft(batch,draft){
+    if(inboxAdopting)return;setInboxAdopting(draft.id);
+    try{const value={...draft,type:'todo',status:'open',parentId:''};delete value.id;delete value.decision;const saved=await api('/api/entries','POST',value);replaceItem(saved);updateInboxDraft(batch.id,draft.id,{decision:'accepted',entryId:saved.id});}
+    catch(error){setError(error.message);}finally{setInboxAdopting('');}
+  }
+  function clearInbox(){setInboxText('');setInboxBatches([]);autoProcessed.current='';try{localStorage.removeItem('rafa-inbox-auto-source');}catch{}setInboxOpen(false);setInboxPhase('');}
   async function login(event){event.preventDefault();if(!password.trim()||loggingIn)return;setLoggingIn(true);setError('');try{await api('/api/auth/login','POST',{password});setPassword('');setAuthenticated(true);setItems(await api('/api/entries'));}catch(e){setError(e.message);}finally{setLoggingIn(false);}}
   function close(){setDraft(null);setText('');setHint(null);}
   async function save(closeAfter=true){
@@ -196,7 +220,7 @@ function App(){
     if(busy&&!saving.current)return;
     if(draft){const saved=await save();if(!saved)return;if(saved.id===item.id)item=saved;}
     setBusy(true);setError('');
-    try{replaceItem(await api('/api/entries/'+item.id,'PUT',{...item,status}));feedback(item.id);}catch(e){setError(e.message);}finally{setBusy(false);}
+    try{replaceItem(await api('/api/entries/'+item.id,'PUT',{...item,status}));if(item.id===currentTaskId&&['done','removed'].includes(status))setCurrentTaskId('');feedback(item.id);}catch(e){setError(e.message);}finally{setBusy(false);}
   }
   async function togglePin(item){
     setMenu(null);
@@ -224,7 +248,7 @@ function App(){
       const next=await api('/api/entries/'+item.id,'DELETE');
       const node=[...board.current?.querySelectorAll('[data-entry-id]')||[]].find(node=>node.dataset.entryId===item.id);
       if(node&&!prefersReducedMotion())await node.animate([{opacity:1,transform:'translateX(0)'},{opacity:0,transform:'translateX(8px)'}],{duration:140,easing:'ease-in',fill:'forwards'}).finished.catch(()=>{});
-      applyItems(next);
+      applyItems(next);if(!next.some(entry=>entry.id===currentTaskId))setCurrentTaskId('');
     }catch(e){setError(e.message);}finally{setBusy(false);}
   }
   function resize(event,axis){
@@ -362,7 +386,7 @@ function App(){
     const statusDate=(removed?item.removedAt:done?item.completedAt:null);
     const statusCaption=statusDate?new Date(statusDate).toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'})+(removed?'取消':'完成'):'';
     const timeTitle=[['createdAt','创建'],['updatedAt','更新'],['completedAt','完成'],['removedAt','移除']].filter(([key])=>item[key]).map(([key,name])=>name+'：'+new Date(item[key]).toLocaleString('zh-CN',{hour12:false})).join('\n');
-    return <div key={item.id} className={'entry '+(done?'is-done ':'')+(removed?'is-removed ':'')+(group?'is-group ':'')+(divider?'is-divider ':'')+(item.url?'has-link ':'')+(item.pinnedAt?'is-pinned ':'')+(dragging===item.id?'drag-source ':'')+(target?'drop-'+target:'')} data-entry-id={item.id} data-depth={depth} style={{'--depth':depth}} onPointerDown={event=>{if(event.target.closest('button,a,textarea,input,.row-actions,.group-controls,.group-picker'))return;beginDrag(event,item);}} onClick={event=>{if(event.target.closest('button,a,textarea,.entry-body,.row-actions,.group-controls,.group-picker')||editing)return;open(item);}} onContextMenu={event=>{if(event.target.closest('textarea'))return;event.preventDefault();setMenu({x:event.clientX, y:event.clientY,item});}}>
+    return <div key={item.id} className={'entry '+(done?'is-done ':'')+(removed?'is-removed ':'')+(group?'is-group ':'')+(divider?'is-divider ':'')+(item.url?'has-link ':'')+(item.pinnedAt?'is-pinned ':'')+(currentTaskId===item.id?'is-current-task ':'')+(dragging===item.id?'drag-source ':'')+(target?'drop-'+target:'')} data-entry-id={item.id} data-depth={depth} style={{'--depth':depth}} onPointerDown={event=>{if(event.target.closest('button,a,textarea,input,.row-actions,.group-controls,.group-picker'))return;beginDrag(event,item);}} onClick={event=>{if(event.target.closest('button,a,textarea,.entry-body,.row-actions,.group-controls,.group-picker')||editing)return;open(item);}} onContextMenu={event=>{if(event.target.closest('textarea'))return;event.preventDefault();setMenu({x:event.clientX, y:event.clientY,item});}}>
       <button className="drag-handle" title="拖动排序；放在文字中间成为子条目" aria-label={'拖动 '+titleOf(item)} onPointerDown={event=>{event.stopPropagation();beginDrag(event,item);}}><DotsSixVertical size={14}/></button>
       {editing?editor():<div className="entry-read">
         {group?<><button className={'group-toggle '+(item.collapsed?'collapsed':'')} aria-label={item.collapsed?'展开分组':'收起分组'} aria-expanded={!item.collapsed} onClick={()=>configureGroup(item,{collapsed:!item.collapsed})}><CaretDown size={15}/></button><button className="group-signature" title="选择分组图标和底色" onClick={()=>setPicker(picker===item.id?'':item.id)}>{item.signature||'🌿'}</button>{picker===item.id&&<div className="group-picker"><div>{['🌿','📌','📝','🚀','💡','🏠','💼'].map(signature=><button key={signature} aria-label={'图标 '+signature} onClick={()=>{configureGroup(item,{signature});setPicker('');}}>{signature}</button>)}</div><div>{['sage','sand','blue','rose','none'].map(tone=><button className={'tone-swatch tone-'+tone} key={tone} aria-label={'底色 '+tone} onClick={()=>{configureGroup(item,{tone});setPicker('');}}/>)}</div></div>}</>:divider?<span className="kind-mark">—</span>:item.type==='todo'?<button className={'checkbox '+(done?'checked':'')} aria-label={done?'重新打开任务':'完成任务'} onClick={()=>updateStatus(item)} disabled={busy}>{done&&<Check size={11} weight="bold"/>}{removed&&<span>−</span>}</button>:<span className="kind-mark">{item.type==='text'?<TextT size={15}/>:item.type==='link'?<LinkSimple size={15}/>:item.type==='bullet'?<span>•</span>:<ImageSquare size={15}/>}</span>}
@@ -389,6 +413,7 @@ function App(){
 
         </div>}
         <div className="row-actions">
+          {item.type==='todo'&&<button className={currentTaskId===item.id?'current-action active':'current-action'} title={currentTaskId===item.id?'取消当前任务':'设为当前任务'} aria-label={currentTaskId===item.id?'取消当前任务':'设为当前任务'} disabled={busy} onClick={()=>setCurrentTask(item)}><Target size={14} weight={currentTaskId===item.id?'fill':'regular'}/></button>}
           <button className={'pin-action '+(item.pinnedAt?'is-pinned':'')} title={item.pinnedAt?'取消置顶':'置顶'} aria-label={item.pinnedAt?'取消置顶':'置顶'} disabled={busy} onClick={()=>togglePin(item)}><PushPin size={14} weight={item.pinnedAt?'fill':'regular'}/></button>
           <button title={removed?'恢复条目':'取消条目'} aria-label={removed?'恢复条目':'取消条目'} disabled={busy} onClick={()=>updateStatus(item,removed?'open':'removed')}>{removed?<ArrowCounterClockwise size={14}/>:<X size={14}/>}</button>
           <button className={confirmDelete===item.id?'confirm-delete':''} title={confirmDelete===item.id?'再次点击确认删除':'永久删除'} aria-label={confirmDelete===item.id?'确认删除条目':'永久删除条目'} disabled={busy} onClick={()=>deleteItem(item)}>{confirmDelete===item.id?'确认删除':<Trash size={14}/>}</button>
@@ -409,6 +434,7 @@ function App(){
     const split=Math.ceil(rendered.length/2);
     return <div className="work-cols"><div className="work-col">{rendered.slice(0,split)}</div><div className="work-col">{rendered.slice(split)}</div></div>;
   }
+  const currentTask=items.find(item=>item.id===currentTaskId);
   if(authenticated===null||loading)return <div className="auth-screen"><div className="auth-brand"><img className="auth-cat" src="/rafa-cat.png" alt=""/><div className="auth-mark">Rafa<span>todo</span><i/></div></div><span className="auth-loading">正在打开…</span><Toast message={error} onClose={()=>setError('')}/></div>;
   if(!authenticated)return <div className="auth-screen"><form className="auth-form" onSubmit={login}><div className="auth-brand"><img className="auth-cat" src="/rafa-cat.png" alt=""/><div className="auth-mark">Rafa<span>todo</span><i/></div></div><div className="auth-input"><input id="password" type="password" autoFocus autoComplete="current-password" value={password} onChange={event=>setPassword(event.target.value)} aria-label="密码" placeholder="••••••" onKeyDown={event=>{if(event.key==='Enter')login(event);}}/></div></form><Toast message={error} onClose={()=>setError('')}/></div>;
   return <div className="app">
@@ -420,14 +446,17 @@ function App(){
       <div className="column-watermark" aria-hidden="true">{domain==='Glean & Idea'?<>GLEAN<span>& IDEA</span></>:domain.toUpperCase()}</div>
       <div className="column-head"><h1>{domain.toUpperCase()}</h1><span>{items.filter(item=>item.domain===domain&&item.type==='todo'&&!['done','removed'].includes(item.status)).length}</span><button className={'column-archive '+(confirmArchive===domain?'confirm-archive':'')} onClick={()=>archiveDomain(domain)} disabled={archiveBusy} aria-label={confirmArchive===domain?'确认归档':'归档 '+domain+' 已完成和已移除的内容'} title={confirmArchive===domain?'再次点击确认归档':'归档本栏'}>{confirmArchive===domain?'确认归档':<Archive size={16}/>}</button></div>
       {items.some(item=>item.domain===domain&&item.pinnedAt)&&<div className="pinned-list" aria-label={domain+' 置顶条目'}>{items.filter(item=>item.domain===domain&&item.pinnedAt).sort((a,b)=>a.pinnedAt.localeCompare(b.pinnedAt)).map(item=><div className="pinned-item" key={item.id} onContextMenu={event=>{event.preventDefault();setMenu({x:event.clientX,y:event.clientY,item});}}><PushPin size={13} weight="fill"/><button className="pinned-title" onClick={()=>locatePinned(item)} title={titleOf(item)}><span className="pinned-title-text">{inline(titleOf(item),false)}</span>{item.content&&<span className="pinned-note">{item.content.split('\n').map((line,index)=><span key={index}>{inline(line,false)}</span>)}</span>}<span className="pinned-meta">{item.priority==='urgent'?'!! 紧急':item.priority==='high'?'! 重要':''}{item.owner?' @'+item.owner:''}{item.tags?' '+item.tags.split(/[,，]\s*/).map(tag=>'#'+tag).join(' '):''}{item.dueDate?' 截止 '+item.dueDate:''}</span></button><button className="pinned-unpin" onClick={()=>togglePin(item)} aria-label={'取消置顶 '+titleOf(item)} title="取消置顶"><PushPin size={13} weight="fill"/></button></div>)}</div>}
+      {domain==='Work'&&currentTask&&<div className="current-task-bar"><Target size={13} weight="fill"/><span>当前</span><button className="current-task-title" onClick={()=>locatePinned(currentTask)}>{titleOf(currentTask)}</button><button className="current-task-clear" onClick={()=>setCurrentTaskId('')} aria-label="清除当前任务" title="清除当前任务">×</button></div>}
       <div className="column-scroll">
       <div className="column-content">{loading?<div className="loading">加载中…</div>:renderTree(domain)}</div>
       <div className="add-row">{draft&&!draft.id&&!draft.insert&&!draft.parentId&&draft.domain===domain?editor():<button onClick={()=>open(null,domain)} aria-label={'在 '+domain+' 新增条目'}><Plus size={14}/><span>写一条…</span></button>}</div>
       </div>
+      {domain==='Work'&&<div className="inbox-wrap"><div className="inbox"><div className="inbox-entry"><textarea id="work-inbox" value={inboxText} onChange={event=>setInboxText(event.target.value)} placeholder="随手记下新信息，不必整理…" aria-label="INBOX 原文"/><button className="inbox-run" onClick={()=>runInboxAI()} disabled={!inboxText.trim()||inboxBusy} title="整理为任务草稿" aria-label="AI 整理"><MagicWand size={17}/></button></div><div className="inbox-status" aria-live="polite">{inboxBusy?inboxPhase:inboxPhase||'停止输入 60 秒后自动整理'}{inboxBatches.length>0&&<button className="inbox-review" onClick={()=>setInboxOpen(value=>!value)}>{inboxOpen?'草稿已展开':`查看 AI 草稿 (${inboxBatches.reduce((sum,batch)=>sum+batch.drafts.filter(draft=>draft.decision==='pending').length,0)} 待处理)`}</button>}</div></div>
+        {inboxOpen&&<div className="inbox-drafts" role="region" aria-label="AI 任务草稿"><div className="inbox-drafts-head"><strong>AI 草稿 <span>{inboxBatches.reduce((sum,batch)=>sum+batch.drafts.filter(draft=>draft.decision==='pending').length,0)} 待处理</span></strong><button onClick={()=>setInboxOpen(false)} aria-label="收起 AI 草稿">收起</button></div><div className="inbox-drafts-list">{inboxBatches.length?inboxBatches.map(batch=><section className="inbox-batch" key={batch.id}><div className="inbox-batch-title"><time>{new Date(batch.createdAt).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}</time><span>{batch.source.slice(0,100)}{batch.source.length>100?'…':''}</span></div>{batch.drafts.map(draft=><article className={'inbox-card '+(draft.decision||'pending')} key={draft.id}><div className="inbox-card-fields"><input value={draft.title} disabled={draft.decision!=='pending'} aria-label="任务标题" onChange={event=>updateInboxDraft(batch.id,draft.id,{title:event.target.value})}/><textarea value={draft.content||''} disabled={draft.decision!=='pending'} placeholder="描述" aria-label="任务描述" onChange={event=>updateInboxDraft(batch.id,draft.id,{content:event.target.value})}/><div className="inbox-card-meta"><select value={draft.domain} disabled={draft.decision!=='pending'} aria-label="所属栏目" onChange={event=>updateInboxDraft(batch.id,draft.id,{domain:event.target.value})}>{domains.map(value=><option key={value} value={value}>{value}</option>)}</select><input value={draft.tags||''} disabled={draft.decision!=='pending'} placeholder="标签" aria-label="标签" onChange={event=>updateInboxDraft(batch.id,draft.id,{tags:event.target.value})}/><input value={draft.owner||''} disabled={draft.decision!=='pending'} placeholder="负责人" aria-label="负责人" onChange={event=>updateInboxDraft(batch.id,batch.drafts.find(row=>row.id===draft.id)?.id,{owner:event.target.value})}/><input value={draft.people||''} disabled={draft.decision!=='pending'} placeholder="其他参与人" aria-label="其他参与人" onChange={event=>updateInboxDraft(batch.id,draft.id,{people:event.target.value})}/><input value={draft.dueDate||''} disabled={draft.decision!=='pending'} type="date" aria-label="截止日期" onChange={event=>updateInboxDraft(batch.id,draft.id,{dueDate:event.target.value})}/><input value={draft.planDate||''} disabled={draft.decision!=='pending'} type="date" aria-label="计划日期" onChange={event=>updateInboxDraft(batch.id,draft.id,{planDate:event.target.value})}/><input value={draft.followupDate||''} disabled={draft.decision!=='pending'} type="date" aria-label="跟进日期" onChange={event=>updateInboxDraft(batch.id,draft.id,{followupDate:event.target.value})}/><input value={draft.stage||''} disabled={draft.decision!=='pending'} placeholder="阶段" aria-label="阶段" onChange={event=>updateInboxDraft(batch.id,draft.id,{stage:event.target.value})}/><select value={draft.priority||'normal'} disabled={draft.decision!=='pending'} aria-label="优先级" onChange={event=>updateInboxDraft(batch.id,draft.id,{priority:event.target.value})}><option value="normal">普通</option><option value="high">重要</option><option value="urgent">紧急</option></select></div></div><div className="inbox-card-actions">{draft.decision==='accepted'?<span>已采纳</span>:draft.decision==='ignored'?<span>已忽略</span>:<><button className="inbox-adopt" onClick={()=>adoptInboxDraft(batch,draft)}>采纳</button><button onClick={()=>updateInboxDraft(batch.id,draft.id,{decision:'ignored'})}>忽略</button></>}</div></article>)}</section>):<p className="inbox-empty">整理后的任务草稿会显示在这里</p>}</div><div className="inbox-drafts-foot"><span>原文和已处理卡片会保留，直到你清理。</span>{inboxBatches.length>0&&inboxBatches.every(batch=>batch.drafts.every(draft=>draft.decision!=='pending'))&&<button onClick={clearInbox}>清空原文与已处理批次</button>}</div></div>}
+      </div>}
     </section>)}{divider('work')}{divider('life')}</main>
     {zen&&(()=>{const root=items.find(item=>item.id===zen.id);if(!root)return null;const rows=zenTree(root);return <div className="zen-screen" role="dialog" aria-modal="true" aria-label="ZEN 专注模式"><div className="zen-atmosphere" aria-hidden="true"><i/><i/><i/><i/></div><div className="zen-content"><div className="zen-label">ZEN <span>{root.domain.toUpperCase()}</span></div><div className="zen-timer" aria-live="off">{zenClock(zenNow-zen.startedAt)}</div><div className="zen-tree">{rows.map(({item,depth})=><article className={'zen-task '+(item.status==='done'?'is-done':'')} key={item.id} style={{'--zen-depth':depth}}><div className="zen-task-line"><span className="zen-mark">{item.status==='done'?'✓':item.type==='group'?'◇':'·'}</span><div className="zen-task-body"><h1>{inline(titleOf(item))}</h1>{item.content&&<p>{zenDescription(item.content)}</p>}{item.image&&<img className="zen-main-image" src={item.image} alt={item.title||'任务图片'}/>}</div></div>{zenMetadata(item).length>0&&<div className="zen-meta">{zenMetadata(item).map((value,index)=><span key={index}>{value}</span>)}</div>}{item.url&&<a href={item.url} target="_blank" rel="noreferrer">{item.url}</a>}</article>)}</div><div className="zen-actions">{zenConfirm==='hold'?<><button onClick={()=>setZenConfirm('')} disabled={busy}>取消</button><button className="zen-hold confirming" onClick={()=>finishZen('hold')} disabled={busy}>确认搁置？</button></>:<><button className={'zen-done '+(zenConfirm==='done'?'confirming':'')} onClick={()=>finishZen('done')} disabled={busy}>{zenConfirm==='done'?'确认完成？':<><Check size={16}/>完成</>}</button>{zenConfirm==='done'?<button onClick={()=>setZenConfirm('')} disabled={busy}>取消</button>:<button className="zen-hold" onClick={()=>finishZen('hold')} disabled={busy}>搁置</button>}</>}</div></div></div>})()}
     {dragging&&<div className="drag-caption">{drop?.placement==='inside'?'成为子条目':drop?.placement==='end'?'移到 '+drop.domain+' 末尾':drop?'移动到这里':'拖到目标位置'}</div>}
-    <AiCapture open={aiOpen} onOpen={()=>setAiOpen(true)} onClose={()=>setAiOpen(false)} onError={message=>setError(message)} onSaved={saved=>{setItems(previous=>[...previous,saved]);requestAnimationFrame(()=>requestAnimationFrame(()=>{const node=document.querySelector(`[data-entry-id="${saved.id}"]`);node?.scrollIntoView({behavior:'smooth',block:'center'});const read=node?.querySelector('.entry-read');if(read&&!prefersReducedMotion())read.animate([{backgroundColor:'#dcefd9'},{backgroundColor:'#dcefd9'},{backgroundColor:'transparent'}],{duration:1200,easing:'ease-out'});}));}}/>
     {menu&&<div className="context-menu" style={{left:Math.min(menu.x,window.innerWidth-190),top:Math.min(menu.y,window.innerHeight-220)}} onPointerDown={event=>event.stopPropagation()}>
       <button onClick={()=>startZen(menu.item)}>ZEN 专注</button>
       <button onClick={()=>insertNear(menu.item,'before','group')}>在上方插入标题</button><button onClick={()=>insertNear(menu.item,'after','group')}>在下方插入标题</button>
