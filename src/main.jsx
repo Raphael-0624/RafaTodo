@@ -78,6 +78,7 @@ function App(){
   const [heatmapOpen,setHeatmapOpen]=useState(false);
   const [aiOpen,setAiOpen]=useState(false);
   const [archiveOpen,setArchiveOpen]=useState(false),[archived,setArchived]=useState([]),[archiveBusy,setArchiveBusy]=useState(false);
+  const [zen,setZen]=useState(null),[zenNow,setZenNow]=useState(Date.now()),[zenConfirm,setZenConfirm]=useState('');
 
   const [layout,setLayout]=useState(readLayout);
   const board=useRef(null),beforePositions=useRef(null);
@@ -115,6 +116,41 @@ function App(){
 
   useEffect(()=>{try{localStorage.setItem('rafa-layout',JSON.stringify(layout));}catch{}},[layout]);
   const itemsRef=useRef(items);itemsRef.current=items;
+  useEffect(()=>{if(!zen)return;const timer=setInterval(()=>setZenNow(Date.now()),1000);return()=>clearInterval(timer);},[zen]);
+  useEffect(()=>{if(!zen)return;const onKeyDown=event=>{if(event.key==='Escape'){event.preventDefault();setZenConfirm('hold');}};document.addEventListener('keydown',onKeyDown);return()=>document.removeEventListener('keydown',onKeyDown);},[zen]);
+  function startZen(item){setMenu(null);setZen({id:item.id,startedAt:Date.now()});setZenNow(Date.now());setZenConfirm('');}
+  function zenDuration(milliseconds){const seconds=Math.max(0,Math.floor(milliseconds/1000)),hours=Math.floor(seconds/3600),minutes=Math.floor(seconds%3600/60),rest=seconds%60;return (hours?hours+'时':'')+(minutes?minutes+'分':'')+rest+'秒';}
+  function zenClock(milliseconds){const seconds=Math.max(0,Math.floor(milliseconds/1000)),hours=Math.floor(seconds/3600),minutes=Math.floor(seconds%3600/60),rest=seconds%60;return hours?[hours,minutes,rest].map(value=>String(value).padStart(2,'0')).join(':'):[minutes,rest].map(value=>String(value).padStart(2,'0')).join(':');}
+  function zenTree(item){const byParent=new Map();for(const entry of itemsRef.current){if(!byParent.has(entry.parentId||''))byParent.set(entry.parentId||'',[]);byParent.get(entry.parentId||'').push(entry);}const result=[];function visit(entry,depth){result.push({item:entry,depth});for(const child of byParent.get(entry.id)||[])visit(child,depth+1);}visit(item,0);return result;}
+  function zenDescription(value){const parts=[],pattern=/(!\[([^\]]*)\]\((https?:\/\/[^\s)]+|\/uploads\/[^\s)]+)\)|(\n))/g;let start=0,match;while((match=pattern.exec(value))){if(match.index>start)parts.push(inline(value.slice(start,match.index)));parts.push(match[4]?<br key={'br-'+match.index}/>:<img key={'img-'+match.index} src={match[3]} alt={match[2]||'描述图片'}/>);start=pattern.lastIndex;}if(start<value.length)parts.push(inline(value.slice(start)));return parts;}
+  function zenMetadata(item){const rows=[];if(item.type)rows.push(item.type==='todo'?'任务':item.type==='group'?'分组':item.type==='text'?'文本':item.type==='link'?'链接':item.type==='image'?'图片':item.type==='bullet'?'条目':'分隔线');if(item.status==='done')rows.push('已完成');else if(item.status==='doing')rows.push('进行中');else if(item.status==='waiting')rows.push('等待中');else if(item.status==='removed')rows.push('已取消');if(item.priority==='urgent')rows.push('!! 紧急');else if(item.priority==='high')rows.push('! 重要');if(item.owner)rows.push('@'+item.owner);for(const person of (item.people||'').split(/[,，]\s*/).filter(Boolean))rows.push('@'+person);for(const tag of (item.tags||'').split(/[,，]\s*/).filter(Boolean))rows.push('#'+tag);for(const [key,label] of [['dueDate','截止'],['planDate','计划'],['followupDate','跟进'],['stage','阶段']])if(item[key])rows.push(label+' '+item[key]);for(const [key,value] of Object.entries(item.custom||{}))if(value)rows.push(key+' · '+value);for(const id of item.dependencies||[])rows.push('前置 · '+(itemsRef.current.find(entry=>entry.id===id)?.title||id));for(const id of item.related||[])rows.push('关联 · '+(itemsRef.current.find(entry=>entry.id===id)?.title||id));return rows;}
+  async function finishZen(action){
+    if(!zen||busy)return;
+    if(zenConfirm!==action){setZenConfirm(action);return;}
+    setError('');
+    const elapsed=zenDuration(Date.now()-zen.startedAt),record=`#ZEN ${action==='done'?'耗时':'已耗时'}${elapsed}`;
+    try{
+      if(draft&&!await save())return;
+      setBusy(true);
+      const entries=itemsRef.current,root=entries.find(item=>item.id===zen.id);
+      if(!root){setZen(null);return;}
+      const tree=zenTree(root),updates=new Map();
+      if(action==='done'){
+        for(const {item} of tree)if(item.type==='todo'&&item.status!=='removed'&&item.status!=='done')updates.set(item.id,{...item,status:'done'});
+        const latest=updates.get(root.id)||root;
+        updates.set(root.id,{...latest,content:[latest.content,record].filter(Boolean).join('\n')});
+      }else{
+        updates.set(root.id,{...root,content:[root.content,record].filter(Boolean).join('\n'),...(!root.pinnedAt&&entries.filter(item=>item.domain===root.domain&&item.pinnedAt).length<3?{pinnedAt:new Date().toISOString()}:{})});
+      }
+      let pinLimitHit=false;
+      for(const [id,value] of updates){
+        try{replaceItem(await api('/api/entries/'+id,'PUT',value));}
+        catch(error){if(action!=='hold'||id!==root.id||!value.pinnedAt||!error.message.includes('置顶'))throw error;const withoutPin={...value,pinnedAt:''};replaceItem(await api('/api/entries/'+id,'PUT',withoutPin));pinLimitHit=true;}
+      }
+      if(action==='hold'&&(pinLimitHit||!updates.get(root.id).pinnedAt&&!root.pinnedAt))setError('已记录 ZEN 耗时，但本栏置顶已满');
+      setZen(null);setZenConfirm('');
+    }catch(error){setError(error.message);}finally{setBusy(false);}
+  }
   const draftRef=useRef(null);draftRef.current=draft;
   useEffect(()=>{api('/api/auth/status').then(status=>{setAuthenticated(status.authenticated);if(status.authenticated){api('/api/entries').then(setItems).catch(e=>setError(e.message));api('/api/archive').then(setArchived).catch(e=>setError(e.message));}}).catch(e=>setError(e.message)).finally(()=>setLoading(false));},[]);
   useEffect(()=>{
@@ -391,9 +427,11 @@ function App(){
       <div className="add-row">{draft&&!draft.id&&!draft.insert&&!draft.parentId&&draft.domain===domain?editor():<button onClick={()=>open(null,domain)} aria-label={'在 '+domain+' 新增条目'}><Plus size={14}/><span>写一条…</span></button>}</div>
       </div>
     </section>)}{divider('work')}{divider('life')}</main>
+    {zen&&(()=>{const root=items.find(item=>item.id===zen.id);if(!root)return null;const rows=zenTree(root);return <div className="zen-screen" role="dialog" aria-modal="true" aria-label="ZEN 专注模式"><div className="zen-atmosphere" aria-hidden="true"><i/><i/><i/><i/></div><div className="zen-content"><div className="zen-label">ZEN <span>{root.domain.toUpperCase()}</span></div><div className="zen-timer" aria-live="off">{zenClock(zenNow-zen.startedAt)}</div><div className="zen-tree">{rows.map(({item,depth})=><article className={'zen-task '+(item.status==='done'?'is-done':'')} key={item.id} style={{'--zen-depth':depth}}><div className="zen-task-line"><span className="zen-mark">{item.status==='done'?'✓':item.type==='group'?'◇':'·'}</span><div className="zen-task-body"><h1>{inline(titleOf(item))}</h1>{item.content&&<p>{zenDescription(item.content)}</p>}{item.image&&<img className="zen-main-image" src={item.image} alt={item.title||'任务图片'}/>}</div></div>{zenMetadata(item).length>0&&<div className="zen-meta">{zenMetadata(item).map((value,index)=><span key={index}>{value}</span>)}</div>}{item.url&&<a href={item.url} target="_blank" rel="noreferrer">{item.url}</a>}</article>)}</div><div className="zen-actions">{zenConfirm==='hold'?<><button onClick={()=>setZenConfirm('')} disabled={busy}>取消</button><button className="zen-hold confirming" onClick={()=>finishZen('hold')} disabled={busy}>确认搁置？</button></>:<><button className={'zen-done '+(zenConfirm==='done'?'confirming':'')} onClick={()=>finishZen('done')} disabled={busy}>{zenConfirm==='done'?'确认完成？':<><Check size={16}/>完成</>}</button>{zenConfirm==='done'?<button onClick={()=>setZenConfirm('')} disabled={busy}>取消</button>:<button className="zen-hold" onClick={()=>finishZen('hold')} disabled={busy}>搁置</button>}</>}</div></div></div>})()}
     {dragging&&<div className="drag-caption">{drop?.placement==='inside'?'成为子条目':drop?.placement==='end'?'移到 '+drop.domain+' 末尾':drop?'移动到这里':'拖到目标位置'}</div>}
     <AiCapture open={aiOpen} onOpen={()=>setAiOpen(true)} onClose={()=>setAiOpen(false)} onError={message=>setError(message)} onSaved={saved=>{setItems(previous=>[...previous,saved]);requestAnimationFrame(()=>requestAnimationFrame(()=>{const node=document.querySelector(`[data-entry-id="${saved.id}"]`);node?.scrollIntoView({behavior:'smooth',block:'center'});const read=node?.querySelector('.entry-read');if(read&&!prefersReducedMotion())read.animate([{backgroundColor:'#dcefd9'},{backgroundColor:'#dcefd9'},{backgroundColor:'transparent'}],{duration:1200,easing:'ease-out'});}));}}/>
-    {menu&&<div className="context-menu" style={{left:Math.min(menu.x,window.innerWidth-190),top:Math.min(menu.y,window.innerHeight-180)}} onPointerDown={event=>event.stopPropagation()}>
+    {menu&&<div className="context-menu" style={{left:Math.min(menu.x,window.innerWidth-190),top:Math.min(menu.y,window.innerHeight-220)}} onPointerDown={event=>event.stopPropagation()}>
+      <button onClick={()=>startZen(menu.item)}>ZEN 专注</button>
       <button onClick={()=>insertNear(menu.item,'before','group')}>在上方插入标题</button><button onClick={()=>insertNear(menu.item,'after','group')}>在下方插入标题</button>
       <button onClick={()=>togglePin(menu.item)}>{menu.item.pinnedAt?'取消 PIN':'PIN 置顶'}</button>
       <button onClick={()=>insertNear(menu.item,'after','todo')}>插入任务</button><button onClick={()=>{setMenu(null);open(null,menu.item.domain,menu.item.id);}}>插入子任务</button>
