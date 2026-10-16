@@ -140,14 +140,9 @@ function App(){
         const latest=updates.get(root.id)||root;
         updates.set(root.id,{...latest,content:[latest.content,record].filter(Boolean).join('\n')});
       }else{
-        updates.set(root.id,{...root,content:[root.content,record].filter(Boolean).join('\n'),...(!root.pinnedAt&&entries.filter(item=>item.domain===root.domain&&item.pinnedAt).length<3?{pinnedAt:new Date().toISOString()}:{})});
+        updates.set(root.id,{...root,content:[root.content,record].filter(Boolean).join('\n')});
       }
-      let pinLimitHit=false;
-      for(const [id,value] of updates){
-        try{replaceItem(await api('/api/entries/'+id,'PUT',value));}
-        catch(error){if(action!=='hold'||id!==root.id||!value.pinnedAt||!error.message.includes('置顶'))throw error;const withoutPin={...value,pinnedAt:''};replaceItem(await api('/api/entries/'+id,'PUT',withoutPin));pinLimitHit=true;}
-      }
-      if(action==='hold'&&(pinLimitHit||!updates.get(root.id).pinnedAt&&!root.pinnedAt))setError('已记录 ZEN 耗时，但本栏置顶已满');
+      for(const [id,value] of updates)replaceItem(await api('/api/entries/'+id,'PUT',value));
       setZen(null);setZenConfirm('');
     }catch(error){setError(error.message);}finally{setBusy(false);}
   }

@@ -146,7 +146,7 @@ button:focus-visible,a:focus-visible,[role="button"]:focus-visible,textarea:focu
 .column{display:flex;flex-direction:column;overflow:hidden;padding-bottom:0;isolation:isolate}
 .column-head{flex:0 0 auto;position:relative;z-index:2;background:#fcfcfa}
 .column-scroll{flex:1;min-height:0;overflow:auto;position:relative;z-index:1;margin:0 -20px;padding:0 20px 35px;scrollbar-width:thin;scrollbar-color:#d5dcd0 transparent;overscroll-behavior:contain}
-.column-watermark{position:absolute;inset:65px 0 0;z-index:0;pointer-events:none;user-select:none;overflow:hidden;display:flex;flex-direction:column;align-items:flex-end;justify-content:flex-end;padding:0 18px 12px;font-size:clamp(80px,16vw,240px);line-height:.8;letter-spacing:-.075em;font-weight:800;color:#364932;opacity:.045}
+.column-watermark{position:absolute;inset:65px 0 0;z-index:-1;pointer-events:none;user-select:none;overflow:hidden;display:flex;flex-direction:column;align-items:flex-end;justify-content:flex-end;padding:0 18px 12px;font-size:clamp(80px,16vw,240px);line-height:.8;letter-spacing:-.075em;font-weight:800;color:#364932;opacity:.045}
 .column:nth-child(3) .column-watermark{font-size:clamp(50px,9vw,150px);line-height:.9}
 .column-watermark span{font-size:.8em}
 .status-caption{display:block;color:#8c9885;font-size:9px;line-height:15px;font-variant-numeric:tabular-nums;animation:status-enter 160ms ease-out}
