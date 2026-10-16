@@ -409,7 +409,10 @@ function App(){
       if(item.type==='group')return <React.Fragment key={item.id}>{draft?.insert?.placement==='before'&&insertion}<div className={'group-block tone-'+(['sage','sand','blue','rose','none'].includes(item.tone)?item.tone:'sage')} style={{marginLeft:level?18:0}}>{row(item,0)}{!item.collapsed&&<div className="group-children">{children}{draft&&!draft.id&&!draft.insert&&draft.parentId===item.id&&editor()}</div>}</div>{draft?.insert?.placement==='after'&&insertion}</React.Fragment>;
       return <React.Fragment key={item.id}>{draft?.insert?.placement==='before'&&insertion}{row(item,level)}{children}{draft&&!draft.id&&!draft.insert&&draft.parentId===item.id&&editor()}{draft?.insert?.placement==='after'&&insertion}</React.Fragment>;
     });}
-    return renderBranch();
+    const rendered=renderBranch();
+    if(domain!=='Work')return rendered;
+    const split=Math.ceil(rendered.length/2);
+    return <div className="work-cols"><div className="work-col">{rendered.slice(0,split)}</div><div className="work-col">{rendered.slice(split)}</div></div>;
   }
   if(authenticated===null||loading)return <div className="auth-screen"><div className="auth-brand"><img className="auth-cat" src="/rafa-cat.png" alt=""/><div className="auth-mark">Rafa<span>todo</span><i/></div></div><span className="auth-loading">正在打开…</span><Toast message={error} onClose={()=>setError('')}/></div>;
   if(!authenticated)return <div className="auth-screen"><form className="auth-form" onSubmit={login}><div className="auth-brand"><img className="auth-cat" src="/rafa-cat.png" alt=""/><div className="auth-mark">Rafa<span>todo</span><i/></div></div><div className="auth-input"><input id="password" type="password" autoFocus autoComplete="current-password" value={password} onChange={event=>setPassword(event.target.value)} aria-label="密码" placeholder="••••••" onKeyDown={event=>{if(event.key==='Enter')login(event);}}/></div></form><Toast message={error} onClose={()=>setError('')}/></div>;
