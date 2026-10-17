@@ -14,6 +14,24 @@
       (function () {
         var errors = [];
 
+        // iOS 13 及更早的系统没有 Promise.allSettled
+        if (typeof Promise !== 'undefined' && !Promise.allSettled) {
+          Promise.allSettled = function (list) {
+            return Promise.all(
+              Array.prototype.map.call(list, function (item) {
+                return Promise.resolve(item).then(
+                  function (value) {
+                    return { status: 'fulfilled', value: value };
+                  },
+                  function (reason) {
+                    return { status: 'rejected', reason: reason };
+                  }
+                );
+              })
+            );
+          };
+        }
+
         function note(text) {
           errors.push(String(text).slice(0, 240));
         }

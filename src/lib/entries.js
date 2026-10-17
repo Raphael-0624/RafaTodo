@@ -1,5 +1,13 @@
 export const domains=['Work','Life','Glean & Idea'];
 
+// Avoid a negative lookbehind here: WebKit before iOS 16.4 parses (?<! as a
+// named group and throws "invalid group specifier name", which kills the bundle.
+function matchLink(value){
+  const found=value.match(/(^|[^!])\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/);
+  if(!found)return null;
+  return [found[0].slice(found[1].length),found[2],found[3]];
+}
+
 // A plain line is a task. Only explicit notation creates metadata.
 export function parseLine(raw,base={},entries=[]){
   let text=raw.trim(),type='todo',status=base.status||'open';
@@ -39,7 +47,7 @@ export function parseLine(raw,base={},entries=[]){
   }
   text=text.replace(/\u0000(\d+)\u0000/g,(_,index)=>protectedParts[Number(index)]).trim();
   const image=text.match(/!\[([^\]]*)\]\(([^\s)]+)\)/);
-  const link=text.match(/(?<!!)\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/);
+  const link=matchLink(text);
   const bareUrl=!image&&!link&&text.match(/^https?:\/\/[^\s]+$/i);
   let url='',imageUrl='';
   if(image){type='image';imageUrl=image[2];text=text.replace(image[0],image[1]);}
