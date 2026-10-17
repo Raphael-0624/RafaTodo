@@ -1,1 +1,90 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><meta name="theme-color" content="#f9f9f7"/><link rel="icon" type="image/png" href="/favicon.png"/><title>RafaTodo</title></head><body><div id="root"></div><script type="module" src="/src/main.jsx"></script><noscript><div style="padding:24px;font:15px/1.7 -apple-system,sans-serif;color:#3a3a34">这个页面需要 JavaScript，请在浏览器设置里开启后重试。</div></noscript><script>setTimeout(function(){var r=document.getElementById('root');if(r&&!r.childElementCount){r.innerHTML='<div style="padding:24px 22px;font:15px/1.7 -apple-system,BlinkMacSystemFont,sans-serif;color:#3a3a34;background:#fcfcfa;min-height:100vh">页面没能加载出来。若设备系统较旧，请先升级到最新版本再试。</div>';}},5000);</script></body></html>
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f9f9f7" />
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <title>RafaTodo</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+    <script>
+      (function () {
+        var errors = [];
+
+        function note(text) {
+          errors.push(String(text).slice(0, 240));
+        }
+
+        window.addEventListener(
+          'error',
+          function (event) {
+            if (event && event.message) note(event.message);
+            else if (event && event.target && event.target.src) note('load failed: ' + event.target.src);
+          },
+          true
+        );
+        window.addEventListener('unhandledrejection', function (event) {
+          note('promise: ' + ((event.reason && event.reason.message) || event.reason));
+        });
+
+        function mounted() {
+          var root = document.getElementById('root');
+          return !!(root && root.childElementCount);
+        }
+
+        function showError() {
+          if (mounted()) return;
+          var root = document.getElementById('root');
+          if (!root) return;
+          var detail = 'UA: ' + navigator.userAgent;
+          if (errors.length) detail += ' | 错误: ' + errors.join(' ; ');
+          var box = document.createElement('div');
+          box.style.cssText =
+            'padding:24px 22px;font:15px/1.7 -apple-system,BlinkMacSystemFont,sans-serif;color:#3a3a34;background:#fcfcfa;min-height:100vh;word-break:break-all';
+          box.innerHTML =
+            '<b>页面没能加载出来。</b><br>请先把系统升级到最新版本再试。<br><small style="color:#777;font-size:11px">' +
+            detail.replace(/</g, '&lt;') +
+            '</small>';
+          root.appendChild(box);
+        }
+
+        // 现代包没能挂载时，手动补载 SystemJS + legacy 兼容包
+        function loadLegacy() {
+          if (mounted()) return;
+          var poly = document.getElementById('vite-legacy-polyfill');
+          var entry = document.getElementById('vite-legacy-entry');
+          if (!poly || !entry || window.System) {
+            setTimeout(showError, 3000);
+            return;
+          }
+          var script = document.createElement('script');
+          script.src = poly.src || poly.getAttribute('data-src');
+          script.onload = function () {
+            try {
+              window.System.import(entry.getAttribute('data-src'));
+            } catch (error) {
+              note(error && error.message);
+            }
+            setTimeout(showError, 6000);
+          };
+          script.onerror = function () {
+            note('legacy polyfill failed to load');
+            setTimeout(showError, 1000);
+          };
+          document.head.appendChild(script);
+        }
+
+        setTimeout(loadLegacy, 5000);
+        setTimeout(showError, 16000);
+      })();
+    </script>
+    <noscript>
+      <div style="padding: 24px; font: 15px/1.7 -apple-system, sans-serif; color: #3a3a34">
+        这个页面需要 JavaScript，请在浏览器设置里开启后重试。
+      </div>
+    </noscript>
+  </body>
+</html>
