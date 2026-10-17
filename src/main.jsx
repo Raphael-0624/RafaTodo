@@ -67,6 +67,42 @@ function Heatmap({items,open,onClose}){
     {selected&&<div className="heatmap-detail"><div className="heatmap-detail-head"><strong>{selected}</strong><span>{detail(selected).join(' · ')||'无活动'}</span></div>{selectedItems.length?<div className="heatmap-items">{selectedItems.map(item=><button key={item.id} onClick={()=>{onClose();document.querySelector(`[data-entry-id="${item.id}"]`)?.scrollIntoView({behavior:'smooth',block:'center'});}}>{titleOf(item)}</button>)}</div>:<span className="heatmap-empty">当天没有可回顾的条目</span>}</div>}
   </div>;
 }
+function EntryContent({item,items=[]}) {
+  const divider=item.type==='divider',done=item.status==='done',removed=item.status==='removed';
+  const overdue=item.type==='todo'&&item.dueDate&&item.dueDate<new Date().toLocaleDateString('en-CA')&&!done&&!removed;
+  const statusDate=removed?item.removedAt:done?item.completedAt:null;
+  const statusCaption=statusDate?new Date(statusDate).toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'})+(removed?'取消':'完成'):'';
+  return <>
+          <span className="entry-title">{divider?<span className="md-rule"/>:inline(titleOf(item))}</span>
+          {item.content&&item.title&&<span className="entry-note">{item.content.split('\n').map((line,index)=><span className="note-line" key={index}>{inline(line)}</span>)}</span>}
+          {item.image&&<img className="thumb" src={item.image} alt={item.title||'条目图片'}/>}
+          <span className="entry-meta">
+            {item.priority==='urgent'&&<span className="urgent">!! 紧急</span>}{item.priority==='high'&&<span className="high">! 重要</span>}
+            {item.owner&&!item.title.includes('@'+item.owner)&&<span className="person">@{item.owner}</span>}
+            {item.people&&item.people.split(/[,，]\s*/).filter(name=>name&&!item.title.includes('@'+name)).map(name=><span key={name} className="person related-person">@{name}</span>)}
+            {item.tags&&item.tags.split(/[,，]\s*/).map(tag=><span className="tag" key={tag}>#{tag}</span>)}
+            {item.dueDate&&<span className={overdue?'overdue':'date'}>↗ {item.dueDate}</span>}
+            {item.status==='waiting'&&<span>等待中</span>}{item.status==='doing'&&<span>进行中</span>}
+            {item.stage&&<span>{item.stage}</span>}
+            {item.planDate&&<span>计划 {item.planDate}</span>}{item.followupDate&&<span>跟进 {item.followupDate}</span>}
+            {Object.entries(item.custom||{}).filter(([,value])=>value).map(([key,value])=><span key={key}>{key} · {value}</span>)}
+            {(item.dependencies||[]).map(id=><span key={id} className="relation">← {items.find(entry=>entry.id===id)?.title||'前置任务'}</span>)}
+            {(item.related||[]).map(id=><span key={id} className="relation">↔ {items.find(entry=>entry.id===id)?.title||'关联条目'}</span>)}
+          </span>
+          {statusCaption&&<span className="status-caption">{statusCaption}</span>}
+  </>;
+}
+function inboxEntry(draft) {
+  const value={...draft,type:'todo',status:'open',parentId:''};
+  delete value.id;delete value.decision;delete value.entryId;
+  return value;
+}
+function InboxDialog({onClose,children}) {
+  const dialog=useRef(null);
+  useEffect(()=>{dialog.current.showModal();},[]);
+  return <dialog ref={dialog} className="inbox-drafts" aria-label="AI 草稿预览" onCancel={onClose} onClose={onClose} onClick={event=>{if(event.target===event.currentTarget){const rect=event.currentTarget.getBoundingClientRect();if(event.clientX<rect.left||event.clientX>rect.right||event.clientY<rect.top||event.clientY>rect.bottom)onClose();}}}>{children}</dialog>;
+}
+
 function App(){
   const [items,setItems]=useState([]),[draft,setDraft]=useState(null),[text,setText]=useState('');
   const [busy,setBusy]=useState(false),[loading,setLoading]=useState(true),[error,setError]=useState('');
@@ -189,7 +225,7 @@ function App(){
   }
   async function adoptInboxDraft(batch,draft){
     if(inboxAdopting)return;setInboxAdopting(draft.id);
-    try{const value={...draft,type:'todo',status:'open',parentId:''};delete value.id;delete value.decision;const saved=await api('/api/entries','POST',value);replaceItem(saved);updateInboxDraft(batch.id,draft.id,{decision:'accepted',entryId:saved.id});}
+    try{const value=inboxEntry(draft);const saved=await api('/api/entries','POST',value);replaceItem(saved);updateInboxDraft(batch.id,draft.id,{decision:'accepted',entryId:saved.id});}
     catch(error){setError(error.message);}finally{setInboxAdopting('');}
   }
   function clearInbox(){setInboxText('');setInboxBatches([]);autoProcessed.current='';try{localStorage.removeItem('rafa-inbox-auto-source');}catch{}setInboxOpen(false);setInboxPhase('');}
@@ -387,37 +423,19 @@ function App(){
     const descendants=new Set([item.id]);let changed=true;while(changed){changed=false;for(const child of items){if(descendants.has(child.parentId)&&!descendants.has(child.id)){descendants.add(child.id);changed=true;}}}
     const tasks=items.filter(entry=>entry.id!==item.id&&descendants.has(entry.id)&&entry.type==='todo'&&entry.status!=='removed');
     const target=drop?.targetId===item.id?drop.placement:'';
-    const overdue=item.type==='todo'&&item.dueDate&&item.dueDate<new Date().toLocaleDateString('en-CA')&&!done&&!removed;
-    const statusDate=(removed?item.removedAt:done?item.completedAt:null);
-    const statusCaption=statusDate?new Date(statusDate).toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'})+(removed?'取消':'完成'):'';
     const timeTitle=[['createdAt','创建'],['updatedAt','更新'],['completedAt','完成'],['removedAt','移除']].filter(([key])=>item[key]).map(([key,name])=>name+'：'+new Date(item[key]).toLocaleString('zh-CN',{hour12:false})).join('\n');
     return <div key={item.id} className={'entry '+(done?'is-done ':'')+(removed?'is-removed ':'')+(group?'is-group ':'')+(divider?'is-divider ':'')+(item.url?'has-link ':'')+(item.pinnedAt?'is-pinned ':'')+(currentTaskId===item.id?'is-current-task ':'')+(dragging===item.id?'drag-source ':'')+(target?'drop-'+target:'')} data-entry-id={item.id} data-depth={depth} style={{'--depth':depth}} onPointerDown={event=>{if(event.target.closest('button,a,textarea,input,.row-actions,.group-controls,.group-picker'))return;beginDrag(event,item);}} onClick={event=>{if(event.target.closest('button,a,textarea,.entry-body,.row-actions,.group-controls,.group-picker')||editing)return;open(item);}} onContextMenu={event=>{if(event.target.closest('textarea'))return;event.preventDefault();setMenu({x:event.clientX, y:event.clientY,item});}}>
       <button className="drag-handle" title="拖动排序；放在文字中间成为子条目" aria-label={'拖动 '+titleOf(item)} onPointerDown={event=>{event.stopPropagation();beginDrag(event,item);}}><DotsSixVertical size={14}/></button>
       {editing?editor():<div className="entry-read">
         {group?<><button className={'group-toggle '+(item.collapsed?'collapsed':'')} aria-label={item.collapsed?'展开分组':'收起分组'} aria-expanded={!item.collapsed} onClick={()=>configureGroup(item,{collapsed:!item.collapsed})}><CaretDown size={15}/></button><button className="group-signature" title="选择分组图标和底色" onClick={()=>setPicker(picker===item.id?'':item.id)}>{item.signature||'🌿'}</button>{picker===item.id&&<div className="group-picker"><div>{['🌿','📌','📝','🚀','💡','🏠','💼'].map(signature=><button key={signature} aria-label={'图标 '+signature} onClick={()=>{configureGroup(item,{signature});setPicker('');}}>{signature}</button>)}</div><div>{['sage','sand','blue','rose','none'].map(tone=><button className={'tone-swatch tone-'+tone} key={tone} aria-label={'底色 '+tone} onClick={()=>{configureGroup(item,{tone});setPicker('');}}/>)}</div></div>}</>:divider?<span className="kind-mark">—</span>:item.type==='todo'?<button className={'checkbox '+(done?'checked':'')} aria-label={done?'重新打开任务':'完成任务'} onClick={()=>updateStatus(item)} disabled={busy}>{done&&<Check size={11} weight="bold"/>}{removed&&<span>−</span>}</button>:<span className="kind-mark">{item.type==='text'?<TextT size={15}/>:item.type==='link'?<LinkSimple size={15}/>:item.type==='bullet'?<span>•</span>:<ImageSquare size={15}/>}</span>}
         <div className={'entry-body '+(item.url?'linked-body':'')} title={timeTitle} role="button" tabIndex={0} onClick={event=>{if(event.target.closest('a'))return;open(item);}} onKeyDown={event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();open(item);}}} aria-label={'编辑 '+titleOf(item)}>
-          <span className="entry-title">{divider?<span className="md-rule"/>:inline(titleOf(item))}</span>
-          {item.content&&item.title&&<span className="entry-note">{item.content.split('\n').map((line,index)=><span className="note-line" key={index}>{inline(line)}</span>)}</span>}
-          {item.image&&<img className="thumb" src={item.image} alt={item.title||'条目图片'}/>}
-          <span className="entry-meta">
-            {item.priority==='urgent'&&<span className="urgent">!! 紧急</span>}{item.priority==='high'&&<span className="high">! 重要</span>}
-            {item.owner&&!item.title.includes('@'+item.owner)&&<span className="person">@{item.owner}</span>}
-            {item.people&&item.people.split(/[,，]\s*/).filter(name=>name&&!item.title.includes('@'+name)).map(name=><span key={name} className="person related-person">@{name}</span>)}
-            {item.tags&&item.tags.split(/[,，]\s*/).map(tag=><span className="tag" key={tag}>#{tag}</span>)}
-            {item.dueDate&&<span className={overdue?'overdue':'date'}>↗ {item.dueDate}</span>}
-            {item.status==='waiting'&&<span>等待中</span>}{item.status==='doing'&&<span>进行中</span>}
-            {item.stage&&<span>{item.stage}</span>}
-            {item.planDate&&<span>计划 {item.planDate}</span>}{item.followupDate&&<span>跟进 {item.followupDate}</span>}
-            {Object.entries(item.custom||{}).filter(([,value])=>value).map(([key,value])=><span key={key}>{key} · {value}</span>)}
-            {(item.dependencies||[]).map(id=><span key={id} className="relation">← {items.find(entry=>entry.id===id)?.title||'前置任务'}</span>)}
-            {(item.related||[]).map(id=><span key={id} className="relation">↔ {items.find(entry=>entry.id===id)?.title||'关联条目'}</span>)}
-          </span>
-          {statusCaption&&<span className="status-caption">{statusCaption}</span>}
+          <EntryContent item={item} items={items}/>
         </div>
         {group&&<div className="group-controls"><span className="group-count" title="已完成 / 总任务数（不含取消）">{tasks.filter(task=>task.status==='done').length}/{tasks.length}</span><button title="在分组内写一条" aria-label="在分组内新增条目" onClick={()=>open(null,item.domain,item.id)}><Plus size={14}/></button>
 
         </div>}
         <div className="row-actions">
+          {!divider&&<button className="zen-entry" title="进入 ZEN 专注模式" aria-label={'进入 ZEN 专注模式：'+titleOf(item)} disabled={busy} onClick={()=>startZen(item)}>ZEN</button>}
           {item.type==='todo'&&<button className={currentTaskId===item.id?'current-action active':'current-action'} title={currentTaskId===item.id?'取消当前任务':'设为当前任务'} aria-label={currentTaskId===item.id?'取消当前任务':'设为当前任务'} disabled={busy} onClick={()=>setCurrentTask(item)}><Target size={14} weight={currentTaskId===item.id?'fill':'regular'}/></button>}
           <button className={'pin-action '+(item.pinnedAt?'is-pinned':'')} title={item.pinnedAt?'取消置顶':'置顶'} aria-label={item.pinnedAt?'取消置顶':'置顶'} disabled={busy} onClick={()=>togglePin(item)}><PushPin size={14} weight={item.pinnedAt?'fill':'regular'}/></button>
           <button title={removed?'恢复条目':'取消条目'} aria-label={removed?'恢复条目':'取消条目'} disabled={busy} onClick={()=>updateStatus(item,removed?'open':'removed')}>{removed?<ArrowCounterClockwise size={14}/>:<X size={14}/>}</button>
@@ -456,10 +474,21 @@ function App(){
       <div className="column-content">{loading?<div className="loading">加载中…</div>:renderTree(domain)}</div>
       <div className="add-row">{draft&&!draft.id&&!draft.insert&&!draft.parentId&&draft.domain===domain?editor():<button onClick={()=>open(null,domain)} aria-label={'在 '+domain+' 新增条目'}><Plus size={14}/><span>写一条…</span></button>}</div>
       </div>
-      {domain==='Work'&&<div className="inbox-wrap"><div className="inbox"><div className="inbox-entry"><textarea id="work-inbox" value={inboxText} onChange={event=>setInboxText(event.target.value)} placeholder="随手记下新信息，不必整理…" aria-label="INBOX 原文"/><button className="inbox-run" onClick={()=>runInboxAI()} disabled={!inboxText.trim()||inboxBusy} title="整理为任务草稿" aria-label="AI 整理"><MagicWand size={17}/></button></div><div className="inbox-status" aria-live="polite">{inboxBusy?inboxPhase:inboxPhase||'停止输入 60 秒后自动整理'}{inboxBatches.length>0&&<button className="inbox-review" onClick={()=>setInboxOpen(value=>!value)}>{inboxOpen?'草稿已展开':`查看 AI 草稿 (${inboxBatches.reduce((sum,batch)=>sum+batch.drafts.filter(draft=>draft.decision==='pending').length,0)} 待处理)`}</button>}</div></div>
-        {inboxOpen&&<div className="inbox-drafts" role="region" aria-label="AI 任务草稿"><div className="inbox-drafts-head"><strong>AI 草稿 <span>{inboxBatches.reduce((sum,batch)=>sum+batch.drafts.filter(draft=>draft.decision==='pending').length,0)} 待处理</span></strong><button onClick={()=>setInboxOpen(false)} aria-label="收起 AI 草稿">收起</button></div><div className="inbox-drafts-list">{inboxBatches.length?inboxBatches.map(batch=><section className="inbox-batch" key={batch.id}><div className="inbox-batch-title"><time>{new Date(batch.createdAt).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}</time><span>{batch.source.slice(0,100)}{batch.source.length>100?'…':''}</span></div>{batch.drafts.map(draft=><article className={'inbox-card '+(draft.decision||'pending')} key={draft.id}><div className="inbox-card-fields"><input value={draft.title} disabled={draft.decision!=='pending'} aria-label="任务标题" onChange={event=>updateInboxDraft(batch.id,draft.id,{title:event.target.value})}/><textarea value={draft.content||''} disabled={draft.decision!=='pending'} placeholder="描述" aria-label="任务描述" onChange={event=>updateInboxDraft(batch.id,draft.id,{content:event.target.value})}/><div className="inbox-card-meta"><select value={draft.domain} disabled={draft.decision!=='pending'} aria-label="所属栏目" onChange={event=>updateInboxDraft(batch.id,draft.id,{domain:event.target.value})}>{domains.map(value=><option key={value} value={value}>{value}</option>)}</select><input value={draft.tags||''} disabled={draft.decision!=='pending'} placeholder="标签" aria-label="标签" onChange={event=>updateInboxDraft(batch.id,draft.id,{tags:event.target.value})}/><input value={draft.owner||''} disabled={draft.decision!=='pending'} placeholder="负责人" aria-label="负责人" onChange={event=>updateInboxDraft(batch.id,batch.drafts.find(row=>row.id===draft.id)?.id,{owner:event.target.value})}/><input value={draft.people||''} disabled={draft.decision!=='pending'} placeholder="其他参与人" aria-label="其他参与人" onChange={event=>updateInboxDraft(batch.id,draft.id,{people:event.target.value})}/><input value={draft.dueDate||''} disabled={draft.decision!=='pending'} type="date" aria-label="截止日期" onChange={event=>updateInboxDraft(batch.id,draft.id,{dueDate:event.target.value})}/><input value={draft.planDate||''} disabled={draft.decision!=='pending'} type="date" aria-label="计划日期" onChange={event=>updateInboxDraft(batch.id,draft.id,{planDate:event.target.value})}/><input value={draft.followupDate||''} disabled={draft.decision!=='pending'} type="date" aria-label="跟进日期" onChange={event=>updateInboxDraft(batch.id,draft.id,{followupDate:event.target.value})}/><input value={draft.stage||''} disabled={draft.decision!=='pending'} placeholder="阶段" aria-label="阶段" onChange={event=>updateInboxDraft(batch.id,draft.id,{stage:event.target.value})}/><select value={draft.priority||'normal'} disabled={draft.decision!=='pending'} aria-label="优先级" onChange={event=>updateInboxDraft(batch.id,draft.id,{priority:event.target.value})}><option value="normal">普通</option><option value="high">重要</option><option value="urgent">紧急</option></select></div></div><div className="inbox-card-actions">{draft.decision==='accepted'?<span>已采纳</span>:draft.decision==='ignored'?<span>已忽略</span>:<><button className="inbox-adopt" onClick={()=>adoptInboxDraft(batch,draft)}>采纳</button><button onClick={()=>updateInboxDraft(batch.id,draft.id,{decision:'ignored'})}>忽略</button></>}</div></article>)}</section>):<p className="inbox-empty">整理后的任务草稿会显示在这里</p>}</div><div className="inbox-drafts-foot"><span>原文和已处理卡片会保留，直到你清理。</span>{inboxBatches.length>0&&inboxBatches.every(batch=>batch.drafts.every(draft=>draft.decision!=='pending'))&&<button onClick={clearInbox}>清空原文与已处理批次</button>}</div></div>}
+      {domain==='Work'&&<div className="inbox-wrap"><div className="inbox"><div className="inbox-entry"><textarea id="work-inbox" value={inboxText} onChange={event=>setInboxText(event.target.value)} placeholder="随手记下新信息，不必整理…" aria-label="INBOX 原文"/><button className="inbox-run" onClick={()=>runInboxAI()} disabled={!inboxText.trim()||inboxBusy} title="整理为任务草稿" aria-label="AI 整理"><MagicWand size={17}/></button></div><div className="inbox-status" aria-live="polite">{inboxBusy?inboxPhase:inboxPhase||'停止输入 60 秒后自动整理'}{inboxBatches.length>0&&<button className="inbox-review" onClick={()=>setInboxOpen(value=>!value)}>{inboxOpen?'草稿预览中':`查看 AI 草稿 (${inboxBatches.reduce((sum,batch)=>sum+batch.drafts.filter(draft=>draft.decision==='pending').length,0)} 待处理)`}</button>}</div></div>
+
       </div>}
     </section>)}{divider('work')}{divider('life')}</main>
+    {inboxOpen&&<InboxDialog onClose={()=>setInboxOpen(false)}>
+      <div className="inbox-drafts-head"><strong>AI 草稿 <span>{inboxBatches.reduce((sum,batch)=>sum+batch.drafts.filter(draft=>draft.decision==='pending').length,0)} 待处理</span></strong><button autoFocus onClick={()=>setInboxOpen(false)} aria-label="关闭 AI 草稿"><X size={18}/></button></div>
+      <div className="inbox-drafts-list">{inboxBatches.length?inboxBatches.map(batch=><section className="inbox-batch" key={batch.id}>
+        <div className="inbox-batch-title"><time>{new Date(batch.createdAt).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}</time><span title={batch.source}>{batch.source}</span></div>
+        {batch.drafts.map(draft=><article className={'inbox-card '+(draft.decision||'pending')} key={draft.id}>
+          <div className="inbox-card-preview"><span className="inbox-card-domain">{draft.domain}</span><div className="entry-read"><span className="checkbox" aria-hidden="true"/><div className="entry-body"><EntryContent item={inboxEntry(draft)} items={items}/></div></div></div>
+          <div className="inbox-card-actions">{draft.decision==='accepted'?<span><Check size={13}/> 已采纳</span>:draft.decision==='ignored'?<span>已忽略</span>:<><button className="inbox-adopt" disabled={!!inboxAdopting} onClick={()=>adoptInboxDraft(batch,draft)}>{inboxAdopting===draft.id?'采纳中…':'采纳'}</button><button disabled={!!inboxAdopting} onClick={()=>updateInboxDraft(batch.id,draft.id,{decision:'ignored'})}>忽略</button></>}</div>
+        </article>)}
+      </section>):<p className="inbox-empty">整理后的任务草稿会显示在这里</p>}</div>
+      <div className="inbox-drafts-foot"><span>逐条采纳，即刻加入对应栏目。</span>{inboxBatches.length>0&&inboxBatches.every(batch=>batch.drafts.every(draft=>draft.decision!=='pending'))&&<button onClick={clearInbox}>清空原文与已处理批次</button>}</div>
+    </InboxDialog>}
     {zen&&(()=>{const root=items.find(item=>item.id===zen.id);if(!root)return null;const rows=zenTree(root);return <div className="zen-screen" role="dialog" aria-modal="true" aria-label="ZEN 专注模式"><div className="zen-atmosphere" aria-hidden="true"><i/><i/><i/><i/></div><div className="zen-content"><div className="zen-label">ZEN <span>{root.domain.toUpperCase()}</span></div><div className="zen-timer" aria-live="off">{zenClock(zenNow-zen.startedAt)}</div><div className="zen-tree">{rows.map(({item,depth})=><article className={'zen-task '+(item.status==='done'?'is-done':'')} key={item.id} style={{'--zen-depth':depth}}><div className="zen-task-line"><span className="zen-mark">{item.status==='done'?'✓':item.type==='group'?'◇':'·'}</span><div className="zen-task-body"><h1>{inline(titleOf(item))}</h1>{item.content&&<p>{zenDescription(item.content)}</p>}{item.image&&<img className="zen-main-image" src={item.image} alt={item.title||'任务图片'}/>}</div></div>{zenMetadata(item).length>0&&<div className="zen-meta">{zenMetadata(item).map((value,index)=><span key={index}>{value}</span>)}</div>}{item.url&&<a href={item.url} target="_blank" rel="noreferrer">{item.url}</a>}</article>)}</div><div className="zen-actions">{zenConfirm==='hold'?<><button onClick={()=>setZenConfirm('')} disabled={busy}>取消</button><button className="zen-hold confirming" onClick={()=>finishZen('hold')} disabled={busy}>确认搁置？</button></>:<><button className={'zen-done '+(zenConfirm==='done'?'confirming':'')} onClick={()=>finishZen('done')} disabled={busy}>{zenConfirm==='done'?'确认完成？':<><Check size={16}/>完成</>}</button>{zenConfirm==='done'?<button onClick={()=>setZenConfirm('')} disabled={busy}>取消</button>:<button className="zen-hold" onClick={()=>finishZen('hold')} disabled={busy}>搁置</button>}</>}</div></div></div>})()}
     {dragging&&<div className="drag-caption">{drop?.placement==='inside'?'成为子条目':drop?.placement==='end'?'移到 '+drop.domain+' 末尾':drop?'移动到这里':'拖到目标位置'}</div>}
     {menu&&<div className="context-menu" style={{left:Math.min(menu.x,window.innerWidth-190),top:Math.min(menu.y,window.innerHeight-220)}} onPointerDown={event=>event.stopPropagation()}>
