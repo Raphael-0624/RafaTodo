@@ -4,6 +4,11 @@ import {Plus,ArrowUpRight,Check,TextT,LinkSimple,ImageSquare,DotsSixVertical,X,T
 import {domains,parseLine,toLine,treeRows,pasteLink} from './lib/entries.js';
 import './style.css';
 
+function newId(){
+  if(typeof crypto!=='undefined'&&typeof crypto.randomUUID==='function')return crypto.randomUUID();
+  return 'id-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,10);
+}
+
 async function api(url,method='GET',body){
   const response=await fetch(url,{method,headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});
   const data=await response.json();
@@ -173,10 +178,10 @@ function App(){
     setInboxBusy(true);setInboxPhase('正在整理');setError('');
     try{
       const result=await api('/api/ai/parse','POST',{input:source});
-      const drafts=(result.items||[]).map(item=>({...item,id:crypto.randomUUID(),decision:'pending'}));
+      const drafts=(result.items||[]).map(item=>({...item,id:newId(),decision:'pending'}));
       autoProcessed.current=source;try{localStorage.setItem('rafa-inbox-auto-source',JSON.stringify(source));}catch{}
       if(!drafts.length){setInboxPhase('没有识别出任务');return;}
-      const batch={id:crypto.randomUUID(),source,createdAt:new Date().toISOString(),drafts};
+      const batch={id:newId(),source,createdAt:new Date().toISOString(),drafts};
       setInboxBatches(previous=>[batch,...previous]);setInboxOpen(true);setInboxPhase(`整理出 ${drafts.length} 条`);
       setTimeout(()=>setInboxPhase(''),3000);
     }catch(error){autoProcessed.current=source;try{localStorage.setItem('rafa-inbox-auto-source',JSON.stringify(source));}catch{}setError(error.message);setInboxPhase('整理失败，可点击按钮重试');}
