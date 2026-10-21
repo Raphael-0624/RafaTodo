@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import {spawn,spawnSync} from 'node:child_process';
-import {mkdtempSync,rmSync} from 'node:fs';
+import {createServer} from 'node:net';
+import {existsSync,mkdtempSync,rmSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
-import {parseLine,toLine,pasteLink} from '../src/lib/entries.js';
+import {parseLine,toLine,pasteLink,moveEntries,nextPosition,workPaneMap,compactEntryPositions,normalizeEntryLayout} from '../src/lib/entries.js';
 const group=parseLine('## 项目 sig:🚀 tone:sage');
 assert.equal(group.type,'group');assert.equal(group.title,'项目');assert.equal(group.signature,'🚀');assert.equal(group.tone,'sage');
 assert.equal(toLine(group),'## 项目 sig:🚀 tone:sage');
@@ -26,16 +27,248 @@ for(const status of ['open','doing','waiting','done','removed']){
   const line=toLine(task,[],{hideTaskPrefix:true});
   assert.ok(!line.startsWith('- ['));
   const edited=parseLine(line.replace('原任务','修改任务'),task);
-  assert.equal(edited.status,status);assert.equal(edited.owner,'小明');assert.equal(edited.title,'修改任务');
+  assert.equal(edited.status,status);assert.equal(edited.owner,'小明');assert.equal(edited.title,'修改任务 @小明');
 }
+const mentionTask={id:'mention',type:'todo',status:'open',title:'开会 @小明',content:'',owner:'小红',people:'小明',tags:''};
+assert.equal(toLine(mentionTask,[],{hideTaskPrefix:true}),'开会 @小明 @小红');
+const editedMention=parseLine(toLine(mentionTask,[],{hideTaskPrefix:true}),mentionTask);
+assert.equal(editedMention.owner,'小明');assert.equal(editedMention.title,'开会 @小明 @小红');
+assert.equal(toLine(editedMention,[],{hideTaskPrefix:true}),'开会 @小明 @小红');
+assert.equal(toLine({...mentionTask,title:'开会 @小明，讨论',owner:'小明'},[],{hideTaskPrefix:true}),'开会 @小明，讨论');
+assert.equal(toLine({...mentionTask,title:'开会 @小明明',owner:'小明',people:''},[],{hideTaskPrefix:true}),'开会 @小明明 @小明');
+const prefixed=parseLine('%需求 登录页重做');
+assert.equal(prefixed.prefixLabel,'需求');assert.equal(prefixed.title,'登录页重做');
+assert.equal(toLine(prefixed),'- [ ] %需求 登录页重做');
+assert.equal(parseLine('需求 %会议 讨论').prefixLabel,'');
+assert.equal(parseLine('%需求 登录页重做').type,'todo');
+assert.equal(parseLine('%需求',{domain:'Work'},[]).prefixLabel,'需求');
+assert.equal(parseLine('%需求', {domain:'Work'}, []).title, '');
+assert.equal(toLine(parseLine('%需求 登录页重做')),'- [ ] %需求 登录页重做');
+const paneEntry=(id,workPane,position)=>({id,domain:'Work',workPane,parentId:'',type:'todo',status:'open',title:id,position,createdAt:'2026-01-01'});
+const moved=moveEntries([paneEntry('left',  'left',0),paneEntry('right','right',0)],{id:'left',targetId:'right',domain:'Work',placement:'after'});
+assert.equal(moved.find(entry=>entry.id==='left').workPane,'right');
+const treeEntries=[paneEntry('parent','left',0),{...paneEntry('child','right',0),parentId:'parent'},paneEntry('other','right',1)];
+const treePanes=workPaneMap(treeEntries);
+assert.equal(treePanes.get('parent'),'left');assert.equal(treePanes.get('child'),'left');assert.equal(treePanes.get('other'),'right');
+const movedTree=moveEntries(treeEntries,{id:'parent',targetId:'other',domain:'Work',placement:'after'});
+assert.equal(movedTree.find(entry=>entry.id==='parent').workPane,'right');assert.equal(movedTree.find(entry=>entry.id==='child').workPane,'right');
+const positionEntries=[paneEntry('left-last','left',9),paneEntry('right-last','right',2),{...paneEntry('child','left',99),parentId:'left-last'}];
+assert.equal(nextPosition(positionEntries,{domain:'Work',workPane:'left'}),10);
+assert.equal(nextPosition(positionEntries,{domain:'Work',workPane:'right'}),3);
+assert.equal(nextPosition(positionEntries,{domain:'Work',workPane:'left',parentId:'left-last'}),100);
+assert.equal(nextPosition([...positionEntries,{...paneEntry('archived','left',50),archivedAt:'2026-01-02'}],{domain:'Work',workPane:'left'}),10);
+const legacyWork=[
+  {id:'legacy-root-a',domain:'Work',parentId:'',type:'todo',status:'open',title:'A',position:0,createdAt:'2026-01-01T00:00:00.000Z'},
+  {id:'legacy-child-a',domain:'Work',parentId:'legacy-root-a',type:'todo',status:'open',title:'A child',position:1,createdAt:'2026-01-02T00:00:00.000Z'},
+  {id:'legacy-root-b',domain:'Work',parentId:'',type:'todo',status:'open',title:'B',position:0,createdAt:'2026-01-03T00:00:00.000Z'},
+  {id:'legacy-child-b',domain:'Work',parentId:'legacy-root-b',type:'todo',status:'open',title:'B child',position:1,createdAt:'2026-01-04T00:00:00.000Z',updatedAt:'2026-01-04T00:00:00.000Z'}
+];
+const normalized=normalizeEntryLayout(legacyWork);
+assert.equal(normalized.find(item=>item.id==='legacy-child-a').workPane,normalized.find(item=>item.id==='legacy-root-a').workPane);
+assert.equal(normalized.find(item=>item.id==='legacy-child-b').workPane,normalized.find(item=>item.id==='legacy-root-b').workPane);
+assert.notEqual(normalized.find(item=>item.id==='legacy-root-a').workPane,normalized.find(item=>item.id==='legacy-root-b').workPane);
+assert.equal(normalized.find(item=>item.id==='legacy-child-b').updatedAt,'2026-01-04T00:00:00.000Z');
+assert.deepEqual(normalizeEntryLayout(normalized),normalized);
+const duplicatePositions=[
+  {id:'left-a',domain:'Work',workPane:'left',parentId:'',position:4,createdAt:'2026-01-01T00:00:00.000Z'},
+  {id:'left-b',domain:'Work',workPane:'left',parentId:'',position:4,createdAt:'2026-01-02T00:00:00.000Z'},
+  {id:'right-a',domain:'Work',workPane:'right',parentId:'',position:0,createdAt:'2026-01-03T00:00:00.000Z'},
+  {id:'right-b',domain:'Work',workPane:'right',parentId:'',position:0,createdAt:'2026-01-04T00:00:00.000Z'},
+  {id:'life-a',domain:'Life',parentId:'',position:8,createdAt:'2026-01-05T00:00:00.000Z'},
+  {id:'life-archived',domain:'Life',parentId:'',position:99,createdAt:'2026-01-06T00:00:00.000Z',archivedAt:'2026-01-07T00:00:00.000Z'}
+];
+const compacted=compactEntryPositions(duplicatePositions);
+for(const [pane,ids] of [['left',['left-a','left-b']],['right',['right-a','right-b']]])assert.deepEqual(ids.map(id=>compacted.find(item=>item.id===id).position),[0,1]);
+assert.equal(compacted.find(item=>item.id==='life-a').position,0);
+assert.equal(compacted.find(item=>item.id==='life-archived').position,99);
+assert.equal(duplicatePositions.find(item=>item.id==='left-a').position,4);
+const migrationDir=mkdtempSync(path.join(tmpdir(),'rafa-layout-'));
+try{
+  const migrationDb=new DatabaseSync(path.join(migrationDir,'rafa.sqlite'));
+  migrationDb.exec('CREATE TABLE entries (id TEXT PRIMARY KEY, data TEXT NOT NULL)');
+  const insert=migrationDb.prepare('INSERT INTO entries VALUES (?,?)');
+  for(const item of legacyWork)insert.run(item.id,JSON.stringify(item));
+  migrationDb.close();
+  const migrationEnv={...process.env,DATA_DIR:migrationDir};
+  const dryRun=spawnSync(process.execPath,['scripts/migrate-layout.mjs'],{env:migrationEnv,encoding:'utf8'});
+  assert.equal(dryRun.status,0,dryRun.stderr);
+  assert.match(dryRun.stdout,/模式：dry-run/);
+  let migratedDb=new DatabaseSync(path.join(migrationDir,'rafa.sqlite'));
+  assert.equal(migratedDb.prepare('SELECT data FROM entries WHERE id=?').get('legacy-child-b').data,JSON.stringify(legacyWork[3]));
+  migratedDb.close();
+  const applied=spawnSync(process.execPath,['scripts/migrate-layout.mjs','--apply'],{env:migrationEnv,encoding:'utf8'});
+  assert.equal(applied.status,0,applied.stderr);
+  migratedDb=new DatabaseSync(path.join(migrationDir,'rafa.sqlite'));
+  const stored=migratedDb.prepare('SELECT data FROM entries ORDER BY id').all().map(row=>JSON.parse(row.data));
+  const byId=items=>items.slice().sort((a,b)=>a.id.localeCompare(b.id));
+  assert.deepEqual(byId(stored),byId(normalizeEntryLayout(legacyWork)));
+  assert.equal(stored.find(item=>item.id==='legacy-child-b').updatedAt,'2026-01-04T00:00:00.000Z');
+  migratedDb.close();
+  const secondRun=spawnSync(process.execPath,['scripts/migrate-layout.mjs','--apply'],{env:migrationEnv,encoding:'utf8'});
+  assert.equal(secondRun.status,0,secondRun.stderr);
+  assert.match(secondRun.stdout,/将改动：0/);
+}finally{rmSync(migrationDir,{recursive:true,force:true});}
 const dir=mkdtempSync(path.join(tmpdir(),'rafa-check-'));
 let server;
-const setPassword=password=>{const result=spawnSync(process.execPath,['scripts/set-password.mjs'],{env:{...process.env,DATA_DIR:dir,INITIAL_PASSWORD:password}});assert.equal(result.status,0,result.stderr.toString());};
-const start=()=>new Promise((resolve,reject)=>{server=spawn(process.execPath,['server.js'],{env:{...process.env,DATA_DIR:dir,PORT:'3099'},stdio:['ignore','pipe','pipe']});server.stdout.once('data',resolve);server.once('error',reject);});
-const stop=()=>new Promise(resolve=>{server.once('exit',resolve);server.kill();});
+const freePort=()=>new Promise((resolve,reject)=>{const probe=createServer();probe.unref();probe.once('error',reject);probe.listen(3200,'127.0.0.1',()=>{const {port}=probe.address();probe.close(()=>setTimeout(()=>resolve(port),50));});});
+const port=await freePort();
+const setPassword=password=>{const result=spawnSync(process.execPath,['scripts/set-password.mjs'],{env:{...process.env,DATA_DIR:dir,INITIAL_PASSWORD:password}});assert.equal(result.status,0,result.stderr.toString());return result.stdout.toString();};
+const start=()=>new Promise((resolve,reject)=>{server=spawn(process.execPath,['server.js'],{env:{...process.env,DATA_DIR:dir,PORT:String(port)},stdio:['ignore','pipe','pipe']});let stderr='';server.stderr.on('data',chunk=>stderr+=chunk);server.once('error',reject);server.once('exit',code=>{if(code!==null&&code!==0)reject(new Error(stderr||'server exited '+code));});const probe=()=>fetch('http://127.0.0.1:'+port+'/api/auth/status').then(()=>resolve()).catch(()=>setTimeout(probe,100));probe();});
+const stop=()=>new Promise(resolve=>{if(!server||server.exitCode!==null)return resolve();server.once('exit',resolve);server.kill();});
 let session='';
-const request=async(method,route,body)=>{const r=await fetch('http://127.0.0.1:3099'+route,{method,headers:{'Content-Type':'application/json',...(session?{Cookie:session}:{})},body:body?JSON.stringify(body):undefined});const cookie=r.headers.get('set-cookie');if(cookie)session=cookie.split(';')[0];return {status:r.status,data:await r.json()};};
-try{setPassword('original');await start();assert.equal((await request('GET','/api/entries')).status,401);assert.equal((await request('GET','/uploads/missing.png')).status,401);assert.equal((await request('POST','/api/auth/login',{password:'bad'})).status,401);assert.equal((await request('POST','/api/auth/login',{password:'original'})).status,200);let {data:item}=await request('POST','/api/entries',{domain:'Work',type:'todo',title:'Persistence check',content:'',dependencies:[]});assert.ok(item.createdAt);assert.equal(item.completedAt,null);const id=item.id;({data:item}=await request('PUT','/api/entries/'+id,{...item,status:'done'}));assert.ok(item.completedAt);assert.equal(item.createdAt,(await request('GET','/api/entries')).data[0].createdAt);({data:item}=await request('PUT','/api/entries/'+id,{...item,status:'removed'}));assert.ok(item.removedAt);assert.ok(item.completedAt);assert.equal((await request('PUT','/api/entries/'+id,{...item,parentId:id})).status,400);await stop();const db=new DatabaseSync(path.join(dir,'rafa.sqlite'));db.prepare('INSERT INTO entries VALUES (?,?)').run('old-idea',JSON.stringify({...item,id:'old-idea',domain:'Idea'}));db.close();setPassword('replacement');session='';await start();assert.equal((await request('POST','/api/auth/login',{password:'original'})).status,401);assert.equal((await request('POST','/api/auth/login',{password:'replacement'})).status,200);const entries=(await request('GET','/api/entries')).data;assert.equal(entries.find(entry=>entry.id==='old-idea').domain,'Glean & Idea');assert.equal(entries.find(entry=>entry.id===id).id,id);assert.equal((await request('POST','/api/entries',{domain:'Life',type:'link',title:'bad',content:'',url:'javascript:alert(1)'})).status,400);const child=(await request('POST','/api/entries',{domain:'Work',type:'todo',status:'open',title:'Child',content:'',parentId:id,dependencies:[id],related:[id]})).data;
-assert.equal((await request('DELETE','/api/entries/missing')).status,404);
-const deleted=await request('DELETE','/api/entries/'+id);assert.equal(deleted.status,200);assert.ok(!deleted.data.some(entry=>entry.id===id));const retained=deleted.data.find(entry=>entry.id===child.id);assert.equal(retained.parentId,'');assert.deepEqual(retained.dependencies,[]);assert.deepEqual(retained.related,[]);
-for(let i=0;i<5;i++)assert.equal((await request('POST','/api/auth/login',{password:'bad'})).status,401);assert.equal((await request('POST','/api/auth/login',{password:'replacement'})).status,429);console.log('PASS: password change, access control, login limit, persistence, metadata, migration, relationships URL validation, prefix-free editing and deletion');}finally{if(server?.exitCode===null)await stop();rmSync(dir,{recursive:true,force:true});}
+const request=async(method,route,body)=>{const r=await fetch('http://127.0.0.1:'+port+route,{method,headers:{'Content-Type':'application/json',...(session?{Cookie:session}:{})},body:body?JSON.stringify(body):undefined});const cookie=r.headers.get('set-cookie');if(cookie)session=cookie.split(';')[0];return {status:r.status,data:await r.json()};};
+const assetStatus=async route=>(await fetch('http://127.0.0.1:'+port+route,{headers:session?{Cookie:session}:{}})).status;
+const activityFor=async domain=>{const route='/api/activity?from='+new Date().toISOString().slice(0,10)+'&to='+new Date().toISOString().slice(0,10)+'&domain='+encodeURIComponent(domain);return (await request('GET',route)).data[0]||{created:0,completed:0,updated:0,removed:0};};
+const assertContiguousPositions=entries=>{
+  const groups=new Map();
+  const panes=workPaneMap(entries);
+  for(const item of entries){
+    const pane=item.domain==='Work'?(panes.get(item.id)||'left'):'';
+    const key=[item.domain,pane,item.parentId||''].join('\0');
+    if(!groups.has(key))groups.set(key,[]);
+    groups.get(key).push(item);
+  }
+  for(const items of groups.values()){
+    const positions=items.map(item=>item.position).sort((a,b)=>a-b);
+    assert.deepEqual(positions,positions.map((_,index)=>index));
+  }
+};
+try{
+  assert.match(setPassword('original'),/原有登录会话已失效/);
+  await start();
+  assert.equal((await request('GET','/api/entries')).status,401);
+  assert.equal(await assetStatus('/uploads/missing.png'),401);
+  assert.equal((await request('POST','/api/auth/login',{password:'bad'})).status,401);
+  assert.equal((await request('POST','/api/auth/login',{password:'original'})).status,200);
+
+  let {data:item}=await request('POST','/api/entries',{domain:'Work',type:'todo',title:'Persistence check',content:'',dependencies:[]});
+  assert.ok(item.createdAt);
+  assert.equal(item.completedAt,null);
+  const id=item.id;
+  ({data:item}=await request('PUT','/api/entries/'+id,{...item,status:'done'}));
+  assert.ok(item.completedAt);
+  assert.equal(item.createdAt,(await request('GET','/api/entries')).data[0].createdAt);
+  ({data:item}=await request('PUT','/api/entries/'+id,{...item,status:'removed'}));
+  assert.ok(item.removedAt);
+  assert.ok(item.completedAt);
+  assert.equal((await request('PUT','/api/entries/'+id,{...item,parentId:id})).status,400);
+
+  // Sessions live in SQLite, so a restart must not log the browser out.
+  await stop();
+  const db=new DatabaseSync(path.join(dir,'rafa.sqlite'));
+  db.prepare('INSERT INTO entries VALUES (?,?)').run('old-idea',JSON.stringify({...item,id:'old-idea',domain:'Idea'}));
+  db.close();
+  await start();
+  let entries=(await request('GET','/api/entries')).data;
+  assert.equal(entries.find(entry=>entry.id===id).id,id);
+
+  // Changing the password revokes every existing cookie immediately.
+  assert.match(setPassword('replacement'),/原有登录会话已失效/);
+  assert.equal((await request('GET','/api/entries')).status,401);
+  assert.equal((await request('POST','/api/auth/login',{password:'original'})).status,401);
+  assert.equal((await request('POST','/api/auth/login',{password:'replacement'})).status,200);
+  entries=(await request('GET','/api/entries')).data;
+  assert.equal(entries.find(entry=>entry.id==='old-idea').domain,'Glean & Idea');
+
+  assert.equal((await request('POST','/api/entries',{domain:'Life',type:'link',title:'bad',content:'',url:'javascript:alert(1)'})).status,400);
+  const child=(await request('POST','/api/entries',{domain:'Work',type:'todo',status:'open',title:'Child',content:'',parentId:id,dependencies:[id],related:[id]})).data;
+  assert.equal((await request('DELETE','/api/entries/missing')).status,404);
+  const deleted=await request('DELETE','/api/entries/'+id);
+  assert.equal(deleted.status,200);
+  assert.ok(!deleted.data.some(entry=>entry.id===id));
+  const retained=deleted.data.find(entry=>entry.id===child.id);
+  assert.equal(retained.parentId,'');
+  assert.deepEqual(retained.dependencies,[]);
+  assert.deepEqual(retained.related,[]);
+
+  // New rows append to their own visible list, even though WORK panes share a domain.
+  const leftParent=(await request('POST','/api/entries',{domain:'Work',type:'todo',status:'open',title:'Left parent',content:'',workPane:'left'})).data;
+  const rightParent=(await request('POST','/api/entries',{domain:'Work',type:'todo',status:'open',title:'Right parent',content:'',workPane:'right'})).data;
+  const leftA=(await request('POST','/api/entries',{domain:'Work',type:'todo',status:'open',title:'Left A',content:'',parentId:leftParent.id,workPane:'left'})).data;
+  const leftB=(await request('POST','/api/entries',{domain:'Work',type:'todo',status:'open',title:'Left B',content:'',parentId:leftParent.id,workPane:'left'})).data;
+  const rightA=(await request('POST','/api/entries',{domain:'Work',type:'todo',status:'open',title:'Right A',content:'',parentId:rightParent.id,workPane:'right'})).data;
+  const rightB=(await request('POST','/api/entries',{domain:'Work',type:'todo',status:'open',title:'Right B',content:'',parentId:rightParent.id,workPane:'right'})).data;
+  assert.ok(leftB.position>leftA.position);
+  assert.ok(rightB.position>rightA.position);
+  entries=(await request('GET','/api/entries')).data;
+  assert.deepEqual(entries.filter(entry=>entry.parentId===leftParent.id).sort((a,b)=>a.position-b.position).map(entry=>entry.title),['Left A','Left B']);
+  assert.deepEqual(entries.filter(entry=>entry.parentId===rightParent.id).sort((a,b)=>a.position-b.position).map(entry=>entry.title),['Right A','Right B']);
+  const prefixed=(await request('POST','/api/entries',{domain:'Work',type:'todo',status:'open',title:'登录页重做',content:'',prefixLabel:'需求',workPane:'left'})).data;
+  assert.equal(prefixed.prefixLabel,'需求');
+
+  // Deleting a middle row compacts positions without counting extra activity.
+  const lifeA=(await request('POST','/api/entries',{domain:'Life',type:'todo',status:'open',title:'Life A',content:''})).data;
+  const lifeB=(await request('POST','/api/entries',{domain:'Life',type:'todo',status:'open',title:'Life B',content:''})).data;
+  const lifeC=(await request('POST','/api/entries',{domain:'Life',type:'todo',status:'open',title:'Life C',content:''})).data;
+  assert.deepEqual([lifeA.position,lifeB.position,lifeC.position],[0,1,2]);
+  const afterCreateActivity=await activityFor('Life');
+  const afterDelete=(await request('DELETE','/api/entries/'+lifeB.id)).data;
+  const remainingLife=afterDelete.filter(entry=>entry.domain==='Life').sort((a,b)=>a.position-b.position);
+  assert.deepEqual(remainingLife.map(entry=>entry.title),['Life A','Life C']);
+  assert.deepEqual(remainingLife.map(entry=>entry.position),[0,1]);
+  assert.deepEqual(await activityFor('Life'),afterCreateActivity);
+
+  // Archiving compacts the visible list but is a layout operation, not activity.
+  const done=(await request('POST','/api/entries',{domain:'Life',type:'todo',status:'done',title:'Archived done',content:''})).data;
+  const blockedParent=(await request('POST','/api/entries',{domain:'Life',type:'todo',status:'done',title:'Done parent with open child',content:''})).data;
+  const blockedChild=(await request('POST','/api/entries',{domain:'Life',type:'todo',status:'open',title:'Open child',content:'',parentId:blockedParent.id})).data;
+  const beforeArchiveActivity=await activityFor('Life');
+  const archivedResult=await request('POST','/api/archive',{domain:'Life'});
+  assert.equal(archivedResult.status,200);
+  assert.equal(archivedResult.data.count,1);
+  const visibleLife=archivedResult.data.items.filter(entry=>entry.domain==='Life');
+  assert.ok(visibleLife.some(entry=>entry.id===blockedParent.id));
+  assert.ok(visibleLife.some(entry=>entry.id===blockedChild.id));
+  assert.ok(!visibleLife.some(entry=>entry.id===done.id));
+  assertContiguousPositions(visibleLife);
+  assert.deepEqual(await activityFor('Life'),beforeArchiveActivity);
+  assert.ok((await request('GET','/api/archive')).data.some(entry=>entry.id===done.id));
+
+  // A move counts once; sibling rows renumbered only by compaction keep updatedAt.
+  const moveA=(await request('POST','/api/entries',{domain:'Life',type:'todo',status:'open',title:'Move A',content:''})).data;
+  const moveB=(await request('POST','/api/entries',{domain:'Life',type:'todo',status:'open',title:'Move B',content:''})).data;
+  const moveC=(await request('POST','/api/entries',{domain:'Life',type:'todo',status:'open',title:'Move C',content:''})).data;
+  const beforeMoveActivity=await activityFor('Life');
+  const movedResult=await request('POST','/api/entries/move',{id:moveC.id,targetId:moveA.id,domain:'Life',placement:'before'});
+  assert.equal(movedResult.status,200);
+  assert.equal(movedResult.data.find(entry=>entry.id===moveA.id).updatedAt,moveA.updatedAt);
+  assert.equal(movedResult.data.find(entry=>entry.id===moveB.id).updatedAt,moveB.updatedAt);
+  assert.equal((await activityFor('Life')).updated,beforeMoveActivity.updated+1);
+
+  // Image files are removed only after the last live or archived reference is gone.
+  const png='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+  const uploadImage=async()=>{const uploaded=await request('POST','/api/upload',{base64:png,mime:'image/png'});assert.equal(uploaded.status,200);return uploaded.data.url;};
+  const soloUrl=await uploadImage();
+  assert.equal(await assetStatus(soloUrl),200);
+  const solo=(await request('POST','/api/entries',{domain:'Life',type:'image',title:'Solo image',content:'',image:soloUrl,status:'open'})).data;
+  await request('DELETE','/api/entries/'+solo.id);
+  assert.equal(await assetStatus(soloUrl),404);
+
+  const sharedUrl=await uploadImage();
+  const archivedImage=(await request('POST','/api/entries',{domain:'Life',type:'image',title:'Archived reference',content:'',image:sharedUrl,status:'open',archivedAt:new Date().toISOString()})).data;
+  const visibleImage=(await request('POST','/api/entries',{domain:'Life',type:'image',title:'Visible reference',content:'',image:sharedUrl,status:'open'})).data;
+  await request('DELETE','/api/entries/'+visibleImage.id);
+  assert.equal(await assetStatus(sharedUrl),200);
+  await request('DELETE','/api/entries/'+archivedImage.id);
+  assert.equal(await assetStatus(sharedUrl),404);
+
+  const orphanPath=path.join(dir,'uploads','orphan-test.png');
+  writeFileSync(orphanPath,Buffer.from(png,'base64'));
+  const cleanupEnv={...process.env,DATA_DIR:dir};
+  const cleanupDryRun=spawnSync(process.execPath,['scripts/cleanup-uploads.mjs'],{env:cleanupEnv,encoding:'utf8'});
+  assert.equal(cleanupDryRun.status,0,cleanupDryRun.stderr);
+  assert.match(cleanupDryRun.stdout,/模式：dry-run/);
+  assert.match(cleanupDryRun.stdout,/orphan-test\.png/);
+  assert.ok(existsSync(orphanPath));
+  const cleanupApply=spawnSync(process.execPath,['scripts/cleanup-uploads.mjs','--apply'],{env:cleanupEnv,encoding:'utf8'});
+  assert.equal(cleanupApply.status,0,cleanupApply.stderr);
+  assert.match(cleanupApply.stdout,/已删除 1 个孤立文件/);
+  assert.ok(!existsSync(orphanPath));
+
+  for(let i=0;i<5;i++)assert.equal((await request('POST','/api/auth/login',{password:'bad'})).status,401);
+  assert.equal((await request('POST','/api/auth/login',{password:'replacement'})).status,429);
+  console.log('PASS: auth persistence and revocation, login limit, append order, prefix labels, layout compaction, activity counters, uploads, migration, validation and deletion');
+}finally{
+  if(server?.exitCode===null)await stop();
+  rmSync(dir,{recursive:true,force:true});
+}
