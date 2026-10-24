@@ -196,6 +196,33 @@ try{
   const prefixed=(await request('POST','/api/entries',{domain:'Work',type:'todo',status:'open',title:'登录页重做',content:'',prefixLabel:'需求',workPane:'left'})).data;
   assert.equal(prefixed.prefixLabel,'需求');
 
+  // Daily items are an independent template list. Only a manual check counts,
+  // and a duplicate same-day completion is idempotent.
+  assert.equal((await request('GET','/api/daily')).status,200);
+  const dailyInitial=(await request('GET','/api/daily')).data;
+  assert.match(dailyInitial.date,/^\d{4}-\d{2}-\d{2}$/);
+  const dailyOne=(await request('POST','/api/daily',{text:'  严格保留原文  %需求  '})).data;
+  assert.equal(dailyOne.item.text,'  严格保留原文  %需求  ');
+  assert.equal((await request('POST','/api/daily',{text:'   '})).status,400);
+  const dailyTwo=(await request('POST','/api/daily',{text:'第二条'})).data;
+  assert.deepEqual(dailyTwo.state.items.map(entry=>entry.text),['  严格保留原文  %需求  ','第二条']);
+  const dailyId=dailyOne.item.id;
+  let dailyChecked=(await request('POST','/api/daily/'+dailyId+'/complete',{completed:true})).data;
+  assert.equal(dailyChecked.items.find(entry=>entry.id===dailyId).completed,true);
+  assert.equal(dailyChecked.items.find(entry=>entry.id===dailyId).completedCount,1);
+  dailyChecked=(await request('POST','/api/daily/'+dailyId+'/complete',{completed:true})).data;
+  assert.equal(dailyChecked.items.find(entry=>entry.id===dailyId).completedCount,1);
+  dailyChecked=(await request('POST','/api/daily/'+dailyId+'/complete',{completed:false})).data;
+  assert.equal(dailyChecked.items.find(entry=>entry.id===dailyId).completed,false);
+  assert.equal(dailyChecked.items.find(entry=>entry.id===dailyId).completedCount,0);
+  const dailyEdited=(await request('PUT','/api/daily/'+dailyId,{text:'改过的每日事项'})).data;
+  assert.equal(dailyEdited.item.text,'改过的每日事项');
+  assert.equal(dailyEdited.state.items[0].id,dailyId);
+  const dailyDeleted=(await request('DELETE','/api/daily/'+dailyId)).data;
+  assert.ok(!dailyDeleted.items.some(entry=>entry.id===dailyId));
+  assert.equal((await request('POST','/api/daily/'+dailyId+'/complete',{completed:true})).status,404);
+  assert.equal((await request('POST','/api/daily/'+dailyTwo.item.id+'/complete',{completed:true})).data.items.find(entry=>entry.id===dailyTwo.item.id).completedCount,1);
+
   // Deleting a middle row compacts positions without counting extra activity.
   const lifeA=(await request('POST','/api/entries',{domain:'Life',type:'todo',status:'open',title:'Life A',content:''})).data;
   const lifeB=(await request('POST','/api/entries',{domain:'Life',type:'todo',status:'open',title:'Life B',content:''})).data;

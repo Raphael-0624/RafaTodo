@@ -30,7 +30,12 @@ function previewType(value){
 }
 const prefersReducedMotion=()=>window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 const clamp=value=>Math.min(75,Math.max(25,value));
-function readLayout(){try{const value=JSON.parse(localStorage.getItem('rafa-layout'));return {work:clamp(Number(value?.work)||50),life:clamp(Number(value?.life)||50),workSplit:Math.min(80,Math.max(20,Number(value?.workSplit)||50))};}catch{return {work:50,life:50,workSplit:50};}}
+const sideHeight=(value,fallback)=>Math.min(70,Math.max(10,Number(value)||fallback));
+function layoutFromSide(daily,life){
+  const d=sideHeight(daily,22),total=Math.min(90,d+sideHeight(life,38));
+  return {daily:d,life:total-d,total};
+}
+function readLayout(){try{const value=JSON.parse(localStorage.getItem('rafa-layout'));const sides=layoutFromSide(value?.daily,value?.life);return {work:clamp(Number(value?.work)||50),...sides,workSplit:Math.min(80,Math.max(20,Number(value?.workSplit)||50))};}catch{return {work:50,...layoutFromSide(22,38),workSplit:50};}}
 const dayKey=value=>{const date=new Date(value);return Number.isNaN(date.getTime())?'':date.toLocaleDateString('en-CA');};
 function readStored(key,fallback){try{const value=localStorage.getItem(key);return value===null?fallback:JSON.parse(value);}catch{return fallback;}}
 function buildIndexes(items){
@@ -154,7 +159,7 @@ function InboxDialog({onClose,children}) {
   return <dialog ref={dialog} className="inbox-drafts" aria-label="AI 草稿预览" onCancel={onClose} onClose={onClose} onClick={event=>{if(event.target===event.currentTarget){const rect=event.currentTarget.getBoundingClientRect();if(event.clientX<rect.left||event.clientX>rect.right||event.clientY<rect.top||event.clientY>rect.bottom)onClose();}}}>{children}</dialog>;
 }
 
-function EntryEditor({draft,items,initialText,onSave,onClose,onUpload,onIndent,onNext,onTextChange}){
+const Editor=React.memo(function EntryEditor({draft,items,initialText,onSave,onClose,onUpload,onIndent,onNext,onTextChange}){
   const [text,setTextState]=useState(initialText),textarea=useRef(null);
   const [hint,setHint]=useState(null),[choice,setChoice]=useState(0);
   const presets=React.useMemo(()=>{
@@ -168,7 +173,7 @@ function EntryEditor({draft,items,initialText,onSave,onClose,onUpload,onIndent,o
     return {'@':[...new Set(people.filter(Boolean))],'#':[...new Set(tags.filter(Boolean))],'%':[...new Set(prefixes.filter(Boolean))]};
   },[items]);
   const setText=value=>{setTextState(value);onTextChange?.(value);};
-  useEffect(()=>{setTextState(initialText);onTextChange?.(initialText);setHint(null);},[initialText,draft?.id]);
+  useEffect(()=>{setTextState(initialText);onTextChange?.(initialText);setHint(null);},[initialText,draft?.editorKey,draft?.id]);
   useEffect(()=>{
     let frame=0;
     const measure=()=>{frame=0;if(!textarea.current)return;textarea.current.style.height='0px';textarea.current.style.height=Math.max(25,textarea.current.scrollHeight)+'px';};
@@ -206,7 +211,8 @@ function EntryEditor({draft,items,initialText,onSave,onClose,onUpload,onIndent,o
       {hint&&<div className="suggestions" role="listbox" aria-label={hint.symbol==='@'?'人员建议':hint.symbol==='%'?'前缀建议':'标签建议'}>{hint.options.map((value,index)=><button key={value} className={choice===index?'selected':''} onMouseDown={event=>event.preventDefault()} onClick={()=>complete(value)} role="option" aria-selected={choice===index}>{hint.symbol}{value}</button>)}</div>}
     </div>
   </div>;
-}
+});
+const EntryEditor=Editor;
 
 function App(){
   const [items,setItems]=useState([]),[draft,setDraft]=useState(null);
@@ -225,9 +231,11 @@ function App(){
   const [inboxText,setInboxText]=useState(()=>readStored('rafa-inbox-text','')),[inboxBatches,setInboxBatches]=useState(()=>readStored('rafa-inbox-batches',[])),[inboxBusy,setInboxBusy]=useState(false),[inboxAdopting,setInboxAdopting]=useState(''),[inboxPhase,setInboxPhase]=useState(''),[inboxOpen,setInboxOpen]=useState(false);
   const [currentTaskId,setCurrentTaskId]=useState(()=>readStored('rafa-current-task',''));
   const autoProcessed=useRef(readStored('rafa-inbox-auto-source',''));
+  const [daily,setDaily]=useState({date:'',timeZone:'Asia/Shanghai',items:[]}),[dailyText,setDailyText]=useState(''),[dailyBusy,setDailyBusy]=useState(''),[dailyAdding,setDailyAdding]=useState(false),[dailyEditing,setDailyEditing]=useState(null),[dailyEditText,setDailyEditText]=useState(''),[dailyConfirmDelete,setDailyConfirmDelete]=useState('');
 
   const [layout,setLayout]=useState(readLayout);
   const board=useRef(null),beforePositions=useRef(null),workScrollRefs=useRef({left:null,right:null}),scrollSaveFrame=useRef(0),scrollRestored=useRef(false);
+  const dailyLoad=useRef(null);
   useLayoutEffect(()=>{
     const previous=beforePositions.current;beforePositions.current=null;
     if(!previous||prefersReducedMotion())return;
@@ -238,8 +246,8 @@ function App(){
     }
   },[items]);
   const byId=indexes.byId,descendantsOf=indexes.descendants;
-  function applyItems(next){
-    beforePositions.current=new Map([...board.current?.querySelectorAll('[data-entry-id]')||[]].map(node=>[node.dataset.entryId,node.getBoundingClientRect()]));
+  function applyItems(next,{animate=true}={}){
+    beforePositions.current=animate&&!prefersReducedMotion()?new Map([...board.current?.querySelectorAll('[data-entry-id]')||[]].map(node=>[node.dataset.entryId,node.getBoundingClientRect()])):null;
     itemsRef.current=next;
     setItems(next);
   }
@@ -265,7 +273,59 @@ function App(){
     if(!prefersReducedMotion())setTimeout(()=>{const read=node.querySelector('.entry-read');if(read)read.animate([{backgroundColor:'#c9e3c6'},{backgroundColor:getComputedStyle(read).backgroundColor}],{duration:1100,easing:'ease-out'});},300);
   }
 
+  async function loadDaily({quiet=false}={}){
+    if(dailyLoad.current)return dailyLoad.current;
+    const task=(async()=>{
+      try{const state=await api('/api/daily');setDaily(state);return state;}
+      catch(e){if(!quiet)setError(e.message);return null;}
+      finally{dailyLoad.current=null;}
+    })();
+    dailyLoad.current=task;
+    return task;
+  }
+  async function addDaily(){
+    const text=dailyText;
+    if(!text.trim()||dailyBusy)return;
+    setDailyBusy('add');setError('');
+    try{const result=await api('/api/daily','POST',{text});setDaily(result.state);setDailyText('');setDailyAdding(false);}
+    catch(e){setError(e.message,addDaily);}
+    finally{setDailyBusy('');}
+  }
+  async function toggleDaily(item){
+    if(dailyBusy)return;
+    setDailyBusy(item.id);setError('');
+    const optimistic={...daily,items:daily.items.map(entry=>entry.id===item.id?{...entry,completed:!entry.completed,completedCount:entry.completedCount+(entry.completed?-1:1)}:entry)};
+    setDaily(optimistic);
+    try{setDaily(await api('/api/daily/'+item.id+'/complete','POST',{completed:!item.completed}));}
+    catch(e){setDaily(daily);setError(e.message,()=>toggleDaily(item));}
+    finally{setDailyBusy('');}
+  }
+  async function startDailyEdit(item){setDailyEditing(item.id);setDailyEditText(item.text);}
+  async function saveDailyEdit(item){
+    const text=dailyEditText;
+    if(!text.trim()||dailyBusy)return;
+    setDailyBusy(item.id);setError('');
+    try{const result=await api('/api/daily/'+item.id,'PUT',{text});setDaily(result.state);setDailyEditing(null);setDailyEditText('');}
+    catch(e){setError(e.message);}
+    finally{setDailyBusy('');}
+  }
+  async function deleteDaily(item){
+    if(dailyConfirmDelete!==item.id){setDailyConfirmDelete(item.id);return;}
+    setDailyConfirmDelete('');
+    if(dailyBusy)return;
+    setDailyBusy(item.id);setError('');
+    try{setDaily(await api('/api/daily/'+item.id,'DELETE'));}
+    catch(e){setError(e.message);}
+    finally{setDailyBusy('');}
+  }
   useEffect(()=>{try{localStorage.setItem('rafa-layout',JSON.stringify(layout));}catch{}},[layout]);
+  useEffect(()=>{
+    if(!authenticated)return;
+    const check=()=>{if(document.visibilityState==='visible')loadDaily({quiet:true});};
+    const timer=setInterval(check,30000);
+    window.addEventListener('focus',check);document.addEventListener('visibilitychange',check);
+    return ()=>{clearInterval(timer);window.removeEventListener('focus',check);document.removeEventListener('visibilitychange',check);};
+  },[authenticated]);
   useEffect(()=>{
     if(!entriesLoaded||scrollRestored.current)return;
     scrollRestored.current=true;
@@ -310,7 +370,7 @@ function App(){
       setZen(null);setZenConfirm('');
     }catch(error){setError(error.message);}finally{markPending('zen',false);}
   }
-  useEffect(()=>{api('/api/auth/status').then(status=>{setAuthenticated(status.authenticated);if(status.authenticated){api('/api/entries').then(entries=>{itemsRef.current=entries;setItems(entries);setEntriesLoaded(true);}).catch(e=>setError(e.message));api('/api/archive').then(setArchived).catch(e=>setError(e.message));}}).catch(e=>setError(e.message)).finally(()=>setLoading(false));},[]);
+  useEffect(()=>{api('/api/auth/status').then(status=>{setAuthenticated(status.authenticated);if(status.authenticated){api('/api/entries').then(entries=>{itemsRef.current=entries;setItems(entries);setEntriesLoaded(true);}).catch(e=>setError(e.message));api('/api/archive').then(setArchived).catch(e=>setError(e.message));loadDaily();}}).catch(e=>setError(e.message)).finally(()=>setLoading(false));},[]);
   useEffect(()=>()=>{drag.current?.cleanup?.();},[]);
   useEffect(()=>{
     if(!draft)return;
@@ -321,7 +381,7 @@ function App(){
   useEffect(()=>{const closeTransient=event=>{setMenu(null);if(!event.target.closest('.row-actions'))setConfirmDelete('');if(!event.target.closest('.column-archive'))setConfirmArchive('');if(!event.target.closest('.heatmap-trigger,.heatmap-popover'))setHeatmapOpen(false);};document.addEventListener('pointerdown',closeTransient);return()=>document.removeEventListener('pointerdown',closeTransient);},[]);
   async function archiveDomain(domain){if(archiveBusy)return;if(confirmArchive!==domain){setConfirmArchive(domain);return;}setConfirmArchive('');setArchiveBusy(true);setError('');try{const result=await api('/api/archive','POST',{domain});itemsRef.current=result.items;setItems(result.items);if(!result.items.some(item=>item.id===currentTaskId))setCurrentTaskId('');setArchived(await api('/api/archive'));setError(result.count?`已归档 ${result.count} 条`:'没有可归档的内容');}catch(e){setError(e.message);}finally{setArchiveBusy(false);}}
   async function openArchive(){setArchiveOpen(true);try{setArchived(await api('/api/archive'));}catch(e){setError(e.message);}}
-  function replaceItem(saved){applyItems(itemsRef.current.some(item=>item.id===saved.id)?itemsRef.current.map(item=>item.id===saved.id?saved:item):[...itemsRef.current,saved]);}
+  function replaceItem(saved,options){applyItems(itemsRef.current.some(item=>item.id===saved.id)?itemsRef.current.map(item=>item.id===saved.id?saved:item):[...itemsRef.current,saved],options);}
   function setCurrentTask(item){setCurrentTaskId(currentTaskId===item.id?'':item.id);}
   function updateInboxDraft(batchId,draftId,patch){setInboxBatches(previous=>previous.map(batch=>batch.id!==batchId?batch:{...batch,drafts:batch.drafts.map(draft=>draft.id===draftId?{...draft,...patch}:draft)}));}
   async function runInboxAI(source=inboxText.trim()){
@@ -401,11 +461,11 @@ function App(){
     const now=new Date().toISOString(),optimistic={...current,status,updatedAt:now,completedAt:current.type==='todo'?(status==='done'?(current.completedAt||now):null):null,removedAt:status==='removed'?(current.removedAt||now):null};
     const commit=()=>updateStatus(current,status);
     markPending(current.id,true);setError('');
-    applyItems(itemsRef.current.map(entry=>entry.id===current.id?optimistic:entry));
+    applyItems(itemsRef.current.map(entry=>entry.id===current.id?optimistic:entry),{animate:false});
     if(current.id===currentTaskId&&['done','removed'].includes(status))setCurrentTaskId('');
     feedback(current.id);
-    try{replaceItem(await api('/api/entries/'+current.id,'PUT',{...current,status}));}
-    catch(e){applyItems(itemsRef.current.map(entry=>entry.id===current.id?current:entry));setError(e.message,commit);}
+    try{replaceItem(await api('/api/entries/'+current.id,'PUT',{...current,status}),{animate:false});}
+    catch(e){applyItems(itemsRef.current.map(entry=>entry.id===current.id?current:entry),{animate:false});setError(e.message,commit);}
     finally{markPending(current.id,false);}
   }
   async function togglePin(item){
@@ -416,9 +476,9 @@ function App(){
     if(!current.pinnedAt&&itemsRef.current.filter(entry=>entry.domain===current.domain&&entry.pinnedAt).length>=3){setError('每个栏目最多置顶 3 条');return;}
     const patch={pinnedAt:current.pinnedAt?'':new Date().toISOString()},optimistic={...current,...patch},commit=()=>togglePin(current);
     markPending(current.id,true);setError('');
-    applyItems(itemsRef.current.map(entry=>entry.id===current.id?optimistic:entry));
-    try{replaceItem(await api('/api/entries/'+current.id,'PUT',{...current,...patch}));}
-    catch(e){applyItems(itemsRef.current.map(entry=>entry.id===current.id?current:entry));setError(e.message,commit);}
+    applyItems(itemsRef.current.map(entry=>entry.id===current.id?optimistic:entry),{animate:false});
+    try{replaceItem(await api('/api/entries/'+current.id,'PUT',{...current,...patch}),{animate:false});}
+    catch(e){applyItems(itemsRef.current.map(entry=>entry.id===current.id?current:entry),{animate:false});setError(e.message,commit);}
     finally{markPending(current.id,false);}
   }
   async function configureGroup(item,patch){
@@ -427,9 +487,9 @@ function App(){
     if(pending.has(current.id))return;
     const optimistic={...current,...patch},commit=()=>configureGroup(current,patch);
     markPending(current.id,true);setError('');
-    applyItems(itemsRef.current.map(entry=>entry.id===current.id?optimistic:entry));
-    try{replaceItem(await api('/api/entries/'+current.id,'PUT',{...current,...patch}));}
-    catch(e){applyItems(itemsRef.current.map(entry=>entry.id===current.id?current:entry));setError(e.message,commit);}
+    applyItems(itemsRef.current.map(entry=>entry.id===current.id?optimistic:entry),{animate:false});
+    try{replaceItem(await api('/api/entries/'+current.id,'PUT',{...current,...patch}),{animate:false});}
+    catch(e){applyItems(itemsRef.current.map(entry=>entry.id===current.id?current:entry),{animate:false});setError(e.message,commit);}
     finally{markPending(current.id,false);}
   }
   async function deleteItem(item){
@@ -450,11 +510,22 @@ function App(){
     event.preventDefault();
     const handle=event.currentTarget,rect=(kind==='workSplit'?handle.parentElement:board.current).getBoundingClientRect();
     try{handle.setPointerCapture(event.pointerId);}catch{}
-    const move=event=>{const value=kind==='workSplit'?(event.clientX-rect.left)/rect.width*100:kind==='work'?(event.clientX-rect.left)/rect.width*100:(event.clientY-rect.top)/rect.height*100;setLayout(previous=>({...previous,[kind]:kind==='workSplit'?Math.min(80,Math.max(20,value)):clamp(value)}));};
+    const move=event=>{
+      if(kind==='daily'||kind==='life'){
+        const value=(event.clientY-rect.top)/rect.height*100,daily=kind==='daily'?value:layout.total-value;
+        setLayout(previous=>{
+          const d=Math.min(Math.max(10,daily),previous.total-10);
+          return {...previous,daily:d,life:previous.total-d};
+        });
+        return;
+      }
+      const value=kind==='workSplit'?(event.clientX-rect.left)/rect.width*100:(event.clientX-rect.left)/rect.width*100;
+      setLayout(previous=>({...previous,[kind]:kind==='workSplit'?Math.min(80,Math.max(20,value)):clamp(value)}));
+    };
     const finish=()=>{window.removeEventListener('pointermove',move);window.removeEventListener('pointerup',finish);window.removeEventListener('pointercancel',finish);document.body.classList.remove('is-resizing');};
     window.addEventListener('pointermove',move);window.addEventListener('pointerup',finish);window.addEventListener('pointercancel',finish);document.body.classList.add('is-resizing');
   }
-  function divider(axis){return <div className={'divider divider-'+axis} role="separator" tabIndex={0} aria-label={axis==='work'?'调整 WORK 宽度':'调整 LIFE 高度'} aria-orientation={axis==='work'?'vertical':'horizontal'} aria-valuemin={25} aria-valuemax={75} aria-valuenow={Math.round(layout[axis])} onPointerDown={event=>resize(event,axis)} onKeyDown={event=>{if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home'].includes(event.key)){event.preventDefault();setLayout(previous=>({...previous,[axis]:event.key==='Home'?50:clamp(previous[axis]+(['ArrowLeft','ArrowUp'].includes(event.key)?-2:2))}));}}}/>;}
+  function divider(axis){const side=axis==='daily'||axis==='life';const value=side?(axis==='daily'?layout.daily:layout.total-layout.daily):layout[axis],min=side?10:25,max=side?layout.total-10:75,amount=2;return <div className={'divider divider-'+axis} role="separator" tabIndex={0} aria-label={axis==='work'?'调整 WORK 宽度':axis==='daily'?'调整 DAILY 高度':'调整 LIFE 高度'} aria-orientation={axis==='work'?'vertical':'horizontal'} aria-valuemin={min} aria-valuemax={max} aria-valuenow={Math.round(value)} onPointerDown={event=>resize(event,axis)} onKeyDown={event=>{if(!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home'].includes(event.key))return;event.preventDefault();const direction=event.key==='Home'?0:(['ArrowLeft','ArrowUp'].includes(event.key)?-1:1);setLayout(previous=>{if(side){const current=axis==='daily'?previous.daily:previous.total-previous.daily;const next=direction===0?(axis==='daily'?22:38):current+direction*amount;const d=axis==='daily'?Math.min(Math.max(10,next),previous.total-10):previous.total-Math.min(Math.max(10,next),previous.total-10);return {...previous,daily:d,life:previous.total-d};}return {...previous,[axis]:direction===0?50:clamp(previous[axis]+direction*amount)};});}}/>;}
   function workDivider(){return <div className="divider divider-worksplit" role="separator" tabIndex={0} aria-label="调整 WORK 左右栏宽度" aria-orientation="vertical" aria-valuemin={20} aria-valuemax={80} aria-valuenow={Math.round(layout.workSplit)} onPointerDown={event=>resize(event,'workSplit')} onKeyDown={event=>{if(['ArrowLeft','ArrowRight','Home'].includes(event.key)){event.preventDefault();setLayout(previous=>({...previous,workSplit:event.key==='Home'?50:Math.min(80,Math.max(20,previous.workSplit+(event.key==='ArrowLeft'?-2:2)))}));}}}/>;}
   async function move(spec){
     if(pending.has('move'))return;
@@ -544,7 +615,7 @@ function App(){
     }catch(e){setError(e.message);}finally{markPending('upload',false);}
   }
   function editor(){
-    return <EntryEditor key={draft.editorKey||draft.id} draft={draft} items={items} initialText={draft.editorSeed||''} onTextChange={value=>{editorTextRef.current=value;}} onSave={source=>save(true,source)} onClose={close} onUpload={file=>upload(file,draft)} onIndent={(outdent,source)=>indent(outdent,source)} onNext={insertNextTask}/>;
+    return <EntryEditor key={draft.editorKey||draft.id} draft={draft} items={items} initialText={draft.editorSeed||''} onTextChange={value=>{editorTextRef.current=value;}} onSave={source=>save(true,source)} onClose={close} onUpload={file=>upload(file,draft)} onIndent={(outdent,source)=>indent(outdent,source)} onNext={source=>insertNextTask(source)}/>;
   }
   function row(item,depth){
     const editing=draft?.id===item.id,done=item.status==='done',removed=item.status==='removed',group=item.type==='group',divider=item.type==='divider';
@@ -600,6 +671,27 @@ function App(){
       try{localStorage.setItem('rafa-work-scroll',JSON.stringify(value));}catch{}
     });
   }
+  function dailyColumn(){
+    const completed=daily.items.filter(item=>item.completed).length;
+    return <section className="column daily-column" data-domain="Daily" aria-label="DAILY">
+      <div className="column-watermark" aria-hidden="true">DAILY</div>
+      <div className="column-head"><h1>DAILY</h1><span>{completed}/{daily.items.length}</span><span className="daily-date">{daily.date||''}</span></div>
+      <div className="column-scroll daily-scroll">
+        <div className="daily-list">
+          {daily.items.length?daily.items.map(item=><div className={'daily-entry '+(item.completed?'is-done':'')} key={item.id}>
+            <button className={'checkbox '+(item.completed?'checked':'')} aria-label={item.completed?'取消今天的完成':'完成今天的每日事项'} disabled={dailyBusy===item.id} onClick={()=>toggleDaily(item)}>{item.completed&&<Check size={11} weight="bold"/>}</button>
+            {dailyEditing===item.id?<form className="daily-edit" onSubmit={event=>{event.preventDefault();saveDailyEdit(item);}}>
+              <input autoFocus value={dailyEditText} onChange={event=>setDailyEditText(event.target.value)} onKeyDown={event=>{if(event.key==='Escape'){event.preventDefault();setDailyEditing(null);}}} aria-label="编辑每日事项"/>
+              <button type="submit" disabled={!dailyEditText.trim()||dailyBusy===item.id}>保存</button>
+            </form>:<button className="daily-text" onClick={()=>startDailyEdit(item)} title="点击编辑">{item.text}</button>}
+            <span className="daily-count">{item.completedCount} 次</span>
+            <div className="daily-actions"><button className={dailyConfirmDelete===item.id?'confirm-delete':''} disabled={dailyBusy===item.id} onClick={()=>deleteDaily(item)} aria-label={dailyConfirmDelete===item.id?'再次点击确认删除':'删除每日事项'} title={dailyConfirmDelete===item.id?'再次点击确认删除':'删除'}>{dailyConfirmDelete===item.id?'确认删除':<Trash size={13}/>}</button></div>
+          </div>):<p className="daily-empty">还没有每日事项。下面添加一条，每天 0 点会重新变为未完成。</p>}
+        </div>
+        <div className="add-row daily-add">{dailyAdding?<form onSubmit={event=>{event.preventDefault();addDaily();}}><input autoFocus value={dailyText} onChange={event=>setDailyText(event.target.value)} onKeyDown={event=>{if(event.key==='Escape'){event.preventDefault();setDailyAdding(false);setDailyText('');}}} placeholder="写一条每日事项…" aria-label="新增每日事项"/><button type="submit" disabled={!dailyText.trim()||dailyBusy==='add'}>添加</button><button type="button" onClick={()=>{setDailyAdding(false);setDailyText('');}}>取消</button></form>:<button onClick={()=>setDailyAdding(true)} aria-label="新增每日事项"><Plus size={14}/><span>添加每日事项…</span></button>}</div>
+      </div>
+    </section>;
+  }
   function workPane(pane,label){
     const endDrop=drop?.domain==='Work'&&drop.placement==='end'&&(drop.workPane||'left')===pane;
     return <div className={'work-col '+(endDrop?'is-end-drop':'')} data-work-pane={pane} onDragOver={event=>{if(event.dataTransfer.types.includes('Files'))event.preventDefault();}} onDrop={event=>{const file=Array.from(event.dataTransfer.files).find(file=>file.type.startsWith('image/'));if(file){event.preventDefault();upload(file,{domain:'Work',type:'image',parentId:'',workPane:pane});}}}>
@@ -617,7 +709,7 @@ function App(){
   return <div className="app">
     <header className="topbar"><a className="brand" href="/" aria-label="RafaTodo 首页"><img className="brand-cat" src="/rafa-cat.png" alt=""/>Rafa<span>todo</span><i/></a><div className="top-tools"><button className="archive-view" onClick={openArchive} aria-label="查看归档" title="查看归档"><Archive size={18}/></button><button className={'heatmap-trigger '+(heatmapOpen?'active':'')} onClick={()=>setHeatmapOpen(value=>!value)} aria-label="打开活动热力图" title="活动热力图"><ChartBar size={18}/></button></div><Heatmap items={items} open={heatmapOpen} onClose={()=>setHeatmapOpen(false)}/><ArchiveModal open={archiveOpen} items={archived} onClose={()=>setArchiveOpen(false)}/></header>
     <ErrorNotice message={error} retry={retryAction} onClose={()=>setError('')}/>
-    <main ref={board} className="board" style={{'--work':layout.work+'%','--life':layout.life+'%'}}>{domains.map(domain=><section className={'column '+(drop?.domain===domain&&drop.placement==='end'?'drop-column':'')} key={domain} data-domain={domain} aria-label={domain}
+    <main ref={board} className="board" style={{'--work':layout.work+'%','--daily':layout.daily+'%','--life':layout.life+'%','--glean':Math.max(10,100-layout.total)+'%'}}>{dailyColumn()}{domains.map(domain=><section className={'column '+(drop?.domain===domain&&drop.placement==='end'?'drop-column':'')} key={domain} data-domain={domain} aria-label={domain}
       onDragOver={event=>{if(event.dataTransfer.types.includes('Files'))event.preventDefault();}}
       onDrop={event=>{const file=Array.from(event.dataTransfer.files).find(file=>file.type.startsWith('image/'));if(file){event.preventDefault();upload(file,domain);}}}>
       <div className="column-watermark" aria-hidden="true">{domain==='Glean & Idea'?<>GLEAN<span>& IDEA</span></>:domain.toUpperCase()}</div>
@@ -631,7 +723,7 @@ function App(){
       {domain==='Work'&&<div className="inbox-wrap"><div className="inbox"><div className="inbox-entry"><textarea id="work-inbox" value={inboxText} onChange={event=>setInboxText(event.target.value)} placeholder="随手记下新信息，不必整理…" aria-label="INBOX 原文"/><button className="inbox-run" onClick={()=>runInboxAI()} disabled={!inboxText.trim()||inboxBusy} title="整理为任务草稿" aria-label="AI 整理"><MagicWand size={17}/></button></div><div className="inbox-status" aria-live="polite">{inboxBusy?inboxPhase:inboxPhase||'停止输入 60 秒后自动整理'}{inboxBatches.length>0&&<button className="inbox-review" onClick={()=>setInboxOpen(value=>!value)}>{inboxOpen?'草稿预览中':`查看 AI 草稿 (${inboxBatches.reduce((sum,batch)=>sum+batch.drafts.filter(draft=>draft.decision==='pending').length,0)} 待处理)`}</button>}</div></div>
 
       </div>}
-    </section>)}{divider('work')}{divider('life')}</main>
+    </section>)}{divider('work')}{divider('daily')}{divider('life')}</main>
     {inboxOpen&&<InboxDialog onClose={()=>setInboxOpen(false)}>
       <div className="inbox-drafts-head"><strong>AI 草稿 <span>{inboxBatches.reduce((sum,batch)=>sum+batch.drafts.filter(draft=>draft.decision==='pending').length,0)} 待处理</span></strong><button autoFocus onClick={()=>setInboxOpen(false)} aria-label="关闭 AI 草稿"><X size={18}/></button></div>
       <div className="inbox-drafts-list">{inboxBatches.length?inboxBatches.map(batch=><section className="inbox-batch" key={batch.id}>

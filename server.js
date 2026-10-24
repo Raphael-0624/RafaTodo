@@ -18,6 +18,20 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS entries (id TEXT PRIMARY KEY, data TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, expires_at INTEGER NOT NULL);
+  CREATE TABLE IF NOT EXISTS daily_items (
+    id TEXT PRIMARY KEY,
+    text TEXT NOT NULL,
+    position INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    deleted_at TEXT NOT NULL DEFAULT ''
+  );
+  CREATE TABLE IF NOT EXISTS daily_completions (
+    item_id TEXT NOT NULL,
+    date TEXT NOT NULL,
+    completed_at TEXT NOT NULL,
+    PRIMARY KEY (item_id, date)
+  );
+  CREATE INDEX IF NOT EXISTS daily_items_position_idx ON daily_items(position);
   CREATE TABLE IF NOT EXISTS activity_daily (
     date TEXT NOT NULL,
     domain TEXT NOT NULL,
@@ -307,6 +321,80 @@ function pinCount(domain, excludeId = '') {
   return db.prepare("SELECT COUNT(*) AS count FROM entries WHERE json_extract(data, '$.domain')=? AND json_extract(data, '$.archivedAt') IS NULL AND json_extract(data, '$.pinnedAt') > '' AND id<>?").get(domain, excludeId).count;
 }
 
+const DAILY_TIME_ZONE = process.env.DAILY_TIME_ZONE || 'Asia/Shanghai';
+const dailyDateFormatter = new Intl.DateTimeFormat('en-CA', {
+  timeZone: DAILY_TIME_ZONE,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit'
+});
+
+function dailyDate(value = new Date()) {
+  return dailyDateFormatter.format(value);
+}
+
+function dailyState() {
+  const today = dailyDate();
+  const rows = db.prepare(`
+    SELECT i.id,i.text,i.position,i.created_at AS createdAt,i.deleted_at AS deletedAt,
+      (SELECT COUNT(*) FROM daily_completions c WHERE c.item_id=i.id) AS completedCount,
+      (SELECT COUNT(*) FROM daily_completions c WHERE c.item_id=i.id AND c.date=?) AS completedToday,
+      (SELECT MAX(completed_at) FROM daily_completions c WHERE c.item_id=i.id) AS lastCompletedAt
+    FROM daily_items i
+    WHERE i.deleted_at=''
+    ORDER BY i.position,i.created_at
+  `).all(today);
+  return {
+    date: today,
+    timeZone: DAILY_TIME_ZONE,
+    items: rows.map(row => ({
+      id: row.id,
+      text: row.text,
+      position: row.position,
+      createdAt: row.createdAt,
+      completed: Boolean(row.completedToday),
+      completedCount: row.completedCount,
+      lastCompletedAt: row.lastCompletedAt || ''
+    }))
+  };
+}
+
+function readDailyItem(id) {
+  return db.prepare("SELECT id,text,position,created_at AS createdAt,deleted_at AS deletedAt FROM daily_items WHERE id=? AND deleted_at=''").get(id);
+}
+
+function nextDailyPosition() {
+  const row = db.prepare('SELECT MAX(position) AS position FROM daily_items WHERE deleted_at=?').get('');
+  return Number.isFinite(row?.position) ? row.position + 1 : 0;
+}
+
+function insertDailyItem(text) {
+  const now = new Date().toISOString();
+  const item = {id: randomUUID(), text, position: nextDailyPosition(), createdAt: now};
+  db.prepare('INSERT INTO daily_items (id,text,position,created_at) VALUES (?,?,?,?)').run(item.id, item.text, item.position, item.createdAt);
+  return item;
+}
+
+function normalizeDailyText(value) {
+  if (typeof value !== 'string') throw new Error('请填写每日事项');
+  const text = value;
+  if (!text.trim()) throw new Error('请填写每日事项');
+  if (text.length > 2000) throw new Error('每日事项不能超过 2000 个字符');
+  return text;
+}
+
+function toggleDailyCompletion(id, completed) {
+  const item = readDailyItem(id);
+  if (!item) return null;
+  const date = dailyDate();
+  if (completed) {
+    db.prepare('INSERT OR IGNORE INTO daily_completions (item_id,date,completed_at) VALUES (?,?,?)').run(id, date, new Date().toISOString());
+  } else {
+    db.prepare('DELETE FROM daily_completions WHERE item_id=? AND date=?').run(id, date);
+  }
+  return dailyState();
+}
+
 function uploadFilesIn(item) {
   const found = new Set();
   for (const match of JSON.stringify(item).matchAll(/\/uploads\/([A-Za-z0-9._-]+)/g)) found.add(match[1]);
@@ -349,6 +437,39 @@ app.delete('/api/entries/:id', (req, res) => {
   res.json(unarchivedEntries());
 });
 
+app.get('/api/daily', (req, res) => {
+  res.json(dailyState());
+});
+app.post('/api/daily', (req, res) => {
+  try {
+    const item = insertDailyItem(normalizeDailyText(req.body?.text));
+    res.json({item, state: dailyState()});
+  } catch (error) {
+    res.status(400).json({error: error.message});
+  }
+});
+app.put('/api/daily/:id', (req, res) => {
+  const item = readDailyItem(req.params.id);
+  if (!item) return res.status(404).json({error: '每日事项不存在'});
+  try {
+    const text = normalizeDailyText(req.body?.text);
+    db.prepare('UPDATE daily_items SET text=? WHERE id=?').run(text, item.id);
+    res.json({item: {...item, text}, state: dailyState()});
+  } catch (error) {
+    res.status(400).json({error: error.message});
+  }
+});
+app.delete('/api/daily/:id', (req, res) => {
+  const item = readDailyItem(req.params.id);
+  if (!item) return res.status(404).json({error: '每日事项不存在'});
+  db.prepare('UPDATE daily_items SET deleted_at=? WHERE id=?').run(new Date().toISOString(), item.id);
+  res.json(dailyState());
+});
+app.post('/api/daily/:id/complete', (req, res) => {
+  const state = toggleDailyCompletion(req.params.id, Boolean(req.body?.completed));
+  if (!state) return res.status(404).json({error: '每日事项不存在'});
+  res.json(state);
+});
 app.get('/api/entries', (req, res) => res.json(unarchivedEntries()));
 app.get('/api/archive', (req, res) => res.json(archivedEntries()));
 app.post('/api/archive', (req, res) => {
