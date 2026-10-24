@@ -1,6 +1,6 @@
 import React,{useState,useEffect,useLayoutEffect,useRef} from 'react';
 import {createRoot} from 'react-dom/client';
-import {Plus,ArrowUpRight,Check,TextT,LinkSimple,ImageSquare,DotsSixVertical,X,Trash,ArrowCounterClockwise,CaretDown,CaretRight,ChartBar,Archive,PushPin,Target,MagicWand} from '@phosphor-icons/react';
+import {Plus,ArrowUpRight,Check,TextT,LinkSimple,ImageSquare,DotsSixVertical,DotsThree,X,Trash,ArrowCounterClockwise,CaretDown,CaretRight,ChartBar,Archive,PushPin,Target,MagicWand} from '@phosphor-icons/react';
 import {domains,parseLine,toLine,treeRows,workPaneMap,pasteLink} from './lib/entries.js';
 import './style.css';
 
@@ -105,22 +105,31 @@ function ArchiveModal({open,items,onClose}){
     {domains.map(domain=>{const rows=rowsFor(domain);return <section className="archive-section" key={domain}><h2>{domain.toUpperCase()} <span>{rows.length}</span></h2>{rows.length?<div className="archive-list">{rows.map(({item,depth})=><div className="archive-item" key={item.id} style={{'--archive-depth':depth}}><span className="archive-status">{item.status==='done'?'完成':'移除'}</span><span className="archive-title">{inline(titleOf(item))}{item.content&&<span className="archive-note">{inline(item.content)}</span>}{metadata(item).length>0&&<span className="archive-tags">{metadata(item).map((value,index)=><span key={index}>{value}</span>)}</span>}</span><time title={'归档于 '+new Date(item.archivedAt).toLocaleString('zh-CN')}>{new Date(archiveTime(item)).toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'})}</time></div>)}</div>:<p className="archive-empty">暂无归档</p>}</section>})}
   </div></div>;
 }
+const HEATMAP_DOMAINS=[['Work','WORK'],['Daily','DAILY'],['Life','LIFE'],['Glean & Idea','GLEAN']];
+const heatLevel=count=>count<=0?0:count===1?1:count<=3?2:count<=6?3:4;
 function Heatmap({items,open,onClose}){
-  const [domain,setDomain]=useState(''),[activity,setActivity]=useState([]),[selected,setSelected]=useState(''),[hovered,setHovered]=useState(null);
-  useEffect(()=>{if(!open)return;const end=new Date(),start=new Date(end);start.setDate(end.getDate()-364);api('/api/activity?from='+dayKey(start)+'&to='+dayKey(end)).then(setActivity).catch(()=>setActivity([]));},[open]);
+  const [activeDomains,setActiveDomains]=useState(()=>new Set(HEATMAP_DOMAINS.map(([value])=>value))),[activity,setActivity]=useState([]),[selected,setSelected]=useState(()=>dayKey(new Date())),[hovered,setHovered]=useState(null);
+  useEffect(()=>{if(!open)return;setSelected(dayKey(new Date()));const end=new Date(),start=new Date(end);start.setDate(end.getDate()-364);api('/api/activity?from='+dayKey(start)+'&to='+dayKey(end)).then(setActivity).catch(()=>setActivity([]));},[open]);
   if(!open)return null;
   const end=new Date(),start=new Date(end);start.setDate(end.getDate()-364);start.setDate(start.getDate()-start.getDay());
   const cells=Array.from({length:53*7},(_,index)=>{const date=new Date(start);date.setDate(start.getDate()+index);return dayKey(date);});
+  const weeks=Array.from({length:53},(_,week)=>Array.from({length:7},(_,day)=>{const date=new Date(start);date.setDate(start.getDate()+week*7+day);return date;}));
+  const monthMarks=[];
+  weeks.forEach((week,index)=>{const date=week[3],year=date.getFullYear(),month=date.getMonth()+1,key=year+'-'+month,previous=monthMarks[monthMarks.length-1];if(previous?.key===key)return;monthMarks.push({key,start:index,year,month,showYear:Boolean(previous)&&month===1});});
+  monthMarks.forEach((mark,index)=>{mark.end=index+1<monthMarks.length?monthMarks[index+1].start:53;});
   const byDate=new Map();for(const row of activity){if(!byDate.has(row.date))byDate.set(row.date,[]);byDate.get(row.date).push(row);}
-  const visibleRows=date=>(byDate.get(date)||[]).filter(row=>!domain||row.domain===domain);
+  const visibleRows=date=>(byDate.get(date)||[]).filter(row=>activeDomains.has(row.domain));
   const detail=date=>visibleRows(date).flatMap(row=>{const counts=[['创建',row.created],['完成',row.completed],['更新',row.updated],['取消',row.removed]].filter(([,count])=>count);return counts.length?[row.domain.toUpperCase()+' '+counts.map(([name,count])=>name+count).join(' ')]:[];});
-  const selectedItems=selected?items.filter(item=>item.domain&&(domain?item.domain===domain:true)&&[item.createdAt,item.updatedAt,item.completedAt,item.removedAt].some(value=>dayKey(value)===selected)):[];
-  return <div className="heatmap-popover" role="dialog" aria-label="活动热力图" onPointerDown={event=>event.stopPropagation()}>
-    <div className="heatmap-head"><span/><button onClick={onClose} aria-label="关闭热力图">×</button></div>
-    <div className="heatmap-filters"><button className={!domain?'active':''} onClick={()=>{setDomain('');setSelected('');}}>全部</button>{domains.map(value=><button key={value} className={domain===value?'active':''} onClick={()=>{setDomain(value);setSelected('');}}>{value==='Glean & Idea'?'GLEAN & IDEA':value.toUpperCase()}</button>)}</div>
-    <div className="heatmap-grid" aria-label="最近一年活动"><div className="heatmap-weekdays"><span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span></div><div className="heatmap-cells">{cells.map((date,index)=>{const rows=visibleRows(date),total=rows.reduce((sum,row)=>sum+row.created+row.completed+row.updated+row.removed,0),level=total?Math.min(4,Math.ceil(total/3)):0,description=[date,...detail(date)].join('\n');return <button key={date+'-'+index} className={'heat-cell level-'+level+(selected===date?' selected':'')} aria-label={description} onMouseEnter={event=>{const rect=event.currentTarget.getBoundingClientRect();setHovered({date,x:Math.min(rect.left,window.innerWidth-240),y:rect.bottom+8});}} onMouseLeave={()=>setHovered(null)} onFocus={event=>{const rect=event.currentTarget.getBoundingClientRect();setHovered({date,x:Math.min(rect.left,window.innerWidth-240),y:rect.bottom+8});}} onBlur={()=>setHovered(null)} onClick={()=>setSelected(date)}/>})}</div></div>
+  const selectedItems=selected?items.filter(item=>item.domain&&activeDomains.has(item.domain)&&[item.createdAt,item.updatedAt,item.completedAt,item.removedAt].some(value=>dayKey(value)===selected)):[];
+  return <div className="heatmap-overlay" role="presentation">
+    <div className="heatmap-popover" role="dialog" aria-modal="true" aria-label="活动热力图">
+    <div className="heatmap-head"><strong>活动热力图</strong><button onClick={onClose} aria-label="关闭热力图" title="关闭热力图"><X size={18}/></button></div>
+    <div className="heatmap-filters"><button className={activeDomains.size===HEATMAP_DOMAINS.length?'active':''} onClick={()=>{setActiveDomains(new Set(HEATMAP_DOMAINS.map(([value])=>value)));setSelected('');}}>全部</button>{HEATMAP_DOMAINS.map(([value,label])=><button key={value} className={'heat-domain-'+value.replace(/\W/g,'').toLowerCase()+(activeDomains.has(value)?' active':'')} aria-pressed={activeDomains.has(value)} onClick={()=>{setActiveDomains(previous=>{const next=new Set(previous);if(next.has(value))next.delete(value);else next.add(value);return next;});setSelected('');}}><i/>{label}</button>)}</div>
+    <div className="heatmap-months" aria-hidden="true"><span className="heatmap-month-spacer"/><div className="heatmap-month-cells">{monthMarks.map((mark,index)=><span key={mark.key} className={'heatmap-month-mark'+(index===0?' first':'')+(mark.showYear?' show-year':'')+((index===monthMarks.length-1&&53-mark.start<5)?' end':'')} style={{gridColumn:(mark.start+1)+' / span '+Math.max(1,mark.end-mark.start)}} title={mark.year+'年'+mark.month+'月'}>{mark.showYear&&<small>{mark.year}</small>}{mark.month}月</span>)}</div></div>
+    <div className="heatmap-grid" aria-label="最近一年活动"><div className="heatmap-weekdays"><span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span></div><div className="heatmap-cells">{cells.map((date,index)=>{const rows=byDate.get(date)||[],byDomain=new Map(rows.map(row=>[row.domain,row])),present=HEATMAP_DOMAINS.map(([value,label])=>{const row=byDomain.get(value),count=row?Number(row.created||0)+Number(row.completed||0)+Number(row.updated||0)+Number(row.removed||0):0;return {value,label,count};}).filter(entry=>entry.count>0),active=present.filter(entry=>activeDomains.has(entry.value)),description=[date,...detail(date)].join('\n');return <button key={date+'-'+index} className={'heat-cell count-'+active.length+(selected===date?' selected':'')} aria-label={description} onMouseEnter={event=>{const rect=event.currentTarget.getBoundingClientRect();setHovered({date,x:Math.min(rect.left,window.innerWidth-240),y:rect.bottom+8});}} onMouseLeave={()=>setHovered(null)} onFocus={event=>{const rect=event.currentTarget.getBoundingClientRect();setHovered({date,x:Math.min(rect.left,window.innerWidth-240),y:rect.bottom+8});}} onBlur={()=>setHovered(null)} onClick={()=>setSelected(date)}>{active.map(({value,label,count})=><i key={value} className={'heat-domain-'+value.replace(/\W/g,'').toLowerCase()+' level-'+heatLevel(count)} title={label+' '+count}/>)}</button>})}</div></div>
     {hovered&&<div className="heatmap-tooltip" style={{left:Math.max(8,hovered.x),top:Math.min(hovered.y,window.innerHeight-120)}} role="tooltip"><strong>{hovered.date}</strong>{detail(hovered.date).map((line,index)=><span key={index}>{line}</span>)}</div>}
-    {selected&&<div className="heatmap-detail"><div className="heatmap-detail-head"><strong>{selected}</strong><span>{detail(selected).join(' · ')||'无活动'}</span></div>{selectedItems.length?<div className="heatmap-items">{selectedItems.map(item=><button key={item.id} onClick={()=>{onClose();document.querySelector(`[data-entry-id="${item.id}"]`)?.scrollIntoView({behavior:'smooth',block:'center'});}}>{titleOf(item)}</button>)}</div>:<span className="heatmap-empty">当天没有可回顾的条目</span>}</div>}
+    <div className={'heatmap-detail'+(selected?' has-selection':'')}>{selected?<><div className="heatmap-detail-head"><strong>{selected}</strong><span>{detail(selected).join(' · ')||'无活动'}</span></div>{selectedItems.length?<div className="heatmap-items">{selectedItems.map(item=><button key={item.id} onClick={()=>{onClose();document.querySelector(`[data-entry-id="${item.id}"]`)?.scrollIntoView({behavior:'smooth',block:'center'});}}>{titleOf(item)}</button>)}</div>:<span className="heatmap-empty">当天没有可回顾的条目</span>}</>:<p className="heatmap-detail-placeholder">点击日期查看当天回顾</p>}</div>
+    </div>
   </div>;
 }
 function EntryContent({item,items=[]}) {
@@ -378,7 +387,7 @@ function App(){
     document.addEventListener('pointerdown',commit);
     return ()=>document.removeEventListener('pointerdown',commit);
   },[draft?.editorKey,draft?.editorSeed,draft?.id,draft?.domain,draft?.workPane]);
-  useEffect(()=>{const closeTransient=event=>{setMenu(null);if(!event.target.closest('.row-actions'))setConfirmDelete('');if(!event.target.closest('.column-archive'))setConfirmArchive('');if(!event.target.closest('.heatmap-trigger,.heatmap-popover'))setHeatmapOpen(false);};document.addEventListener('pointerdown',closeTransient);return()=>document.removeEventListener('pointerdown',closeTransient);},[]);
+  useEffect(()=>{const closeTransient=event=>{if(!event.target.closest('.context-menu,.row-actions'))setMenu(null);if(!event.target.closest('.row-actions,.context-menu'))setConfirmDelete('');if(!event.target.closest('.column-archive'))setConfirmArchive('');};document.addEventListener('pointerdown',closeTransient);return()=>document.removeEventListener('pointerdown',closeTransient);},[]);
   async function archiveDomain(domain){if(archiveBusy)return;if(confirmArchive!==domain){setConfirmArchive(domain);return;}setConfirmArchive('');setArchiveBusy(true);setError('');try{const result=await api('/api/archive','POST',{domain});itemsRef.current=result.items;setItems(result.items);if(!result.items.some(item=>item.id===currentTaskId))setCurrentTaskId('');setArchived(await api('/api/archive'));setError(result.count?`已归档 ${result.count} 条`:'没有可归档的内容');}catch(e){setError(e.message);}finally{setArchiveBusy(false);}}
   async function openArchive(){setArchiveOpen(true);try{setArchived(await api('/api/archive'));}catch(e){setError(e.message);}}
   function replaceItem(saved,options){applyItems(itemsRef.current.some(item=>item.id===saved.id)?itemsRef.current.map(item=>item.id===saved.id?saved:item):[...itemsRef.current,saved],options);}
@@ -634,11 +643,7 @@ function App(){
 
         </div>}
         <div className="row-actions">
-          {!divider&&<button className="zen-entry" title="进入 ZEN 专注模式" aria-label={'进入 ZEN 专注模式：'+titleOf(item)} disabled={pending.has(item.id)} onClick={()=>startZen(item)}>ZEN</button>}
-          {item.type==='todo'&&<button className={currentTaskId===item.id?'current-action active':'current-action'} title={currentTaskId===item.id?'取消当前任务':'设为当前任务'} aria-label={currentTaskId===item.id?'取消当前任务':'设为当前任务'} disabled={pending.has(item.id)} onClick={()=>setCurrentTask(item)}><Target size={14} weight={currentTaskId===item.id?'fill':'regular'}/></button>}
-          <button className={'pin-action '+(item.pinnedAt?'is-pinned':'')} title={item.pinnedAt?'取消置顶':'置顶'} aria-label={item.pinnedAt?'取消置顶':'置顶'} disabled={pending.has(item.id)} onClick={()=>togglePin(item)}><PushPin size={14} weight={item.pinnedAt?'fill':'regular'}/></button>
-          <button title={removed?'恢复条目':'取消条目'} aria-label={removed?'恢复条目':'取消条目'} disabled={pending.has(item.id)} onClick={()=>updateStatus(item,removed?'open':'removed')}>{removed?<ArrowCounterClockwise size={14}/>:<X size={14}/>}</button>
-          <button className={confirmDelete===item.id?'confirm-delete':''} title={confirmDelete===item.id?'再次点击确认删除':'永久删除'} aria-label={confirmDelete===item.id?'确认删除条目':'永久删除条目'} disabled={pending.has(item.id)} onClick={()=>deleteItem(item)}>{confirmDelete===item.id?'确认删除':<Trash size={14}/>}</button>
+          <button className="row-menu-trigger" title="更多操作" aria-label={'更多操作：'+titleOf(item)} aria-haspopup="menu" aria-expanded={menu?.item?.id===item.id} disabled={pending.has(item.id)} onClick={event=>{event.stopPropagation();const rect=event.currentTarget.getBoundingClientRect();setMenu(menu?.item?.id===item.id?null:{x:rect.right-180,y:rect.bottom+4,item,kind:'row'});}}><DotsThree size={17} weight="bold"/></button>
         </div>
       </div>}
     </div>;
@@ -737,11 +742,20 @@ function App(){
     </InboxDialog>}
     {zen&&(()=>{const root=items.find(item=>item.id===zen.id);if(!root)return null;const rows=zenTree(root);return <div className="zen-screen" role="dialog" aria-modal="true" aria-label="ZEN 专注模式"><div className="zen-atmosphere" aria-hidden="true"><i/><i/><i/><i/></div><div className="zen-content"><div className="zen-label">ZEN <span>{root.domain.toUpperCase()}</span></div><div className="zen-timer" aria-live="off">{zenClock(zenNow-zen.startedAt)}</div><div className="zen-tree">{rows.map(({item,depth})=><article className={'zen-task '+(item.status==='done'?'is-done':'')} key={item.id} style={{'--zen-depth':depth}}><div className="zen-task-line"><span className="zen-mark">{item.status==='done'?'✓':item.type==='group'?'◇':'·'}</span><div className="zen-task-body"><h1>{inline(titleOf(item))}</h1>{item.content&&<p>{zenDescription(item.content)}</p>}{item.image&&<img className="zen-main-image" src={item.image} alt={item.title||'任务图片'}/>}</div></div>{zenMetadata(item).length>0&&<div className="zen-meta">{zenMetadata(item).map((value,index)=><span key={index}>{value}</span>)}</div>}{item.url&&<a href={item.url} target="_blank" rel="noreferrer">{item.url}</a>}</article>)}</div><div className="zen-actions">{zenConfirm==='hold'?<><button onClick={()=>setZenConfirm('')} disabled={pending.has('zen')}>取消</button><button className="zen-hold confirming" onClick={()=>finishZen('hold')} disabled={pending.has('zen')}>确认搁置？</button></>:<><button className={'zen-done '+(zenConfirm==='done'?'confirming':'')} onClick={()=>finishZen('done')} disabled={pending.has('zen')}>{zenConfirm==='done'?'确认完成？':<><Check size={16}/>完成</>}</button>{zenConfirm==='done'?<button onClick={()=>setZenConfirm('')} disabled={pending.has('zen')}>取消</button>:<button className="zen-hold" onClick={()=>finishZen('hold')} disabled={pending.has('zen')}>搁置</button>}</>}</div></div></div>})()}
     {dragging&&<div className="drag-caption">{drop?.placement==='inside'?'成为子条目':drop?.placement==='end'?(drop.domain==='Work'?'移到'+(drop.workPane==='right'?'右栏':'左栏')+'末尾':'移到 '+drop.domain+' 末尾'):drop?'移动到这里':'拖到目标位置'}</div>}
-    {menu&&<div className="context-menu" style={{left:Math.min(menu.x,window.innerWidth-190),top:Math.min(menu.y,window.innerHeight-220)}} onPointerDown={event=>event.stopPropagation()}>
-      <button onClick={()=>startZen(menu.item)}>ZEN 专注</button>
-      <button onClick={()=>insertNear(menu.item,'before','group')}>在上方插入标题</button><button onClick={()=>insertNear(menu.item,'after','group')}>在下方插入标题</button>
-      <button onClick={()=>togglePin(menu.item)}>{menu.item.pinnedAt?'取消 PIN':'PIN 置顶'}</button>
-      <button onClick={()=>insertNear(menu.item,'after','todo')}>插入任务</button><button onClick={()=>{setMenu(null);open(null,menu.item.domain,menu.item.id);}}>插入子任务</button>
+    {menu&&<div className={'context-menu '+(menu.kind==='row'?'row-menu':'')} role="menu" style={{left:Math.max(8,Math.min(menu.x,window.innerWidth-190)),top:Math.min(menu.y,window.innerHeight-(menu.kind==='row'?270:220))}} onPointerDown={event=>event.stopPropagation()} onKeyDown={event=>{if(event.key==='Escape'){event.preventDefault();setMenu(null);}}}>
+      {menu.kind==='row'?<>
+        {menu.item.type!=='divider'&&<button role="menuitem" disabled={pending.has(menu.item.id)} onClick={()=>startZen(menu.item)}>ZEN 专注</button>}
+        {menu.item.type==='todo'&&<button role="menuitem" disabled={pending.has(menu.item.id)} onClick={()=>{setCurrentTask(menu.item);setMenu(null);}}>{currentTaskId===menu.item.id?'取消当前任务':'设为当前任务'}</button>}
+        <button role="menuitem" disabled={pending.has(menu.item.id)} onClick={()=>togglePin(menu.item)}>{menu.item.pinnedAt?'取消置顶':'置顶'}</button>
+        <button role="menuitem" disabled={pending.has(menu.item.id)} onClick={()=>{updateStatus(menu.item,menu.item.status==='removed'?'open':'removed');setMenu(null);}}>{menu.item.status==='removed'?'恢复条目':'取消条目'}</button>
+        <span className="context-separator"/>
+        <button role="menuitem" className={confirmDelete===menu.item.id?'confirm-delete':''} disabled={pending.has(menu.item.id)} onClick={()=>{if(confirmDelete===menu.item.id){deleteItem(menu.item);setMenu(null);}else setConfirmDelete(menu.item.id);}}>{confirmDelete===menu.item.id?'再次点击确认删除':'永久删除'}</button>
+      </>:<>
+        <button onClick={()=>startZen(menu.item)}>ZEN 专注</button>
+        <button onClick={()=>insertNear(menu.item,'before','group')}>在上方插入标题</button><button onClick={()=>insertNear(menu.item,'after','group')}>在下方插入标题</button>
+        <button onClick={()=>togglePin(menu.item)}>{menu.item.pinnedAt?'取消 PIN':'PIN 置顶'}</button>
+        <button onClick={()=>insertNear(menu.item,'after','todo')}>插入任务</button><button onClick={()=>{setMenu(null);open(null,menu.item.domain,menu.item.id);}}>插入子任务</button>
+      </>}
     </div>}
   </div>;
 }

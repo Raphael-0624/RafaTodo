@@ -44,6 +44,8 @@ assert.equal(parseLine('%需求 登录页重做').type,'todo');
 assert.equal(parseLine('%需求',{domain:'Work'},[]).prefixLabel,'需求');
 assert.equal(parseLine('%需求', {domain:'Work'}, []).title, '');
 assert.equal(toLine(parseLine('%需求 登录页重做')),'- [ ] %需求 登录页重做');
+assert.equal(parseLine('%需求 %需求 登录页重做').title,'登录页重做');
+assert.equal(parseLine('%需求 登录页重做').title,'登录页重做');
 const paneEntry=(id,workPane,position)=>({id,domain:'Work',workPane,parentId:'',type:'todo',status:'open',title:id,position,createdAt:'2026-01-01'});
 const moved=moveEntries([paneEntry('left',  'left',0),paneEntry('right','right',0)],{id:'left',targetId:'right',domain:'Work',placement:'after'});
 assert.equal(moved.find(entry=>entry.id==='left').workPane,'right');
@@ -222,6 +224,9 @@ try{
   assert.ok(!dailyDeleted.items.some(entry=>entry.id===dailyId));
   assert.equal((await request('POST','/api/daily/'+dailyId+'/complete',{completed:true})).status,404);
   assert.equal((await request('POST','/api/daily/'+dailyTwo.item.id+'/complete',{completed:true})).data.items.find(entry=>entry.id===dailyTwo.item.id).completedCount,1);
+  const dailyActivity=(await request('GET','/api/activity')).data.find(entry=>entry.domain==='Daily'&&entry.date===dailyInitial.date);
+  assert.equal(dailyActivity?.completed,1);
+  assert.equal(dailyActivity?.created,0);
 
   // Deleting a middle row compacts positions without counting extra activity.
   const lifeA=(await request('POST','/api/entries',{domain:'Life',type:'todo',status:'open',title:'Life A',content:''})).data;

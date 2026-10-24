@@ -510,7 +510,13 @@ app.get('/api/activity', (req, res) => {
   const to = typeof req.query.to === 'string' ? req.query.to : '';
   const domain = domains.includes(req.query.domain) ? req.query.domain : '';
   const rows = db.prepare(`SELECT date,domain,created_count AS created,completed_count AS completed,updated_count AS updated,removed_count AS removed FROM activity_daily WHERE (?='' OR date>=?) AND (?='' OR date<=?) AND (?='' OR domain=?) ORDER BY date`).all(from, from, to, to, domain, domain);
-  res.json(rows);
+  if (domain) return res.json(rows);
+  // DAILY completions are date-scoped snapshots rather than entry activity.
+  // Keep them as their own domain so the heatmap can show all four colors
+  // without touching the entry domain validator.
+  const daily = db.prepare(`SELECT date,COUNT(*) AS completed FROM daily_completions WHERE (?='' OR date>=?) AND (?='' OR date<=?) GROUP BY date ORDER BY date`).all(from, from, to, to)
+    .map(row => ({date: row.date, domain: 'Daily', created: 0, completed: row.completed, updated: 0, removed: 0}));
+  res.json([...rows, ...daily].sort((a, b) => a.date.localeCompare(b.date)));
 });
 app.post('/api/entries', (req, res) => {
   const now = new Date().toISOString();

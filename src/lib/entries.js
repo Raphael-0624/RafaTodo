@@ -22,6 +22,9 @@ export function parseLine(raw,base={},entries=[]){
   const metadata={owner:'',people:'',tags:'',priority:'normal',dueDate:'',planDate:'',followupDate:'',stage:'',prefixLabel:'',custom:{},dependencies:[],related:[]};
   const prefix=text.match(/^%([\p{L}\p{N}_/-]+)(?:\s+|$)/u);
   if(prefix){metadata.prefixLabel=prefix[1];text=text.slice(prefix[0].length);}
+  // A prefix is display metadata, not part of the title. Also removes a
+  // duplicated "%label" left by older edits or direct API writes.
+  if(metadata.prefixLabel)text=text.replace(new RegExp('^%'+metadata.prefixLabel.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'(?:\\s+|$)','u'),'');
   const people=[],tags=[];
   // Formatting and link destinations are content, never metadata.
   const protectedParts=[];
