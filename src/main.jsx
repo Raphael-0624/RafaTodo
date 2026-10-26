@@ -92,6 +92,8 @@ function ArchiveModal({open,items,onClose}){
     entries.filter(item=>!seen.has(item.id)).sort(sortByTime).forEach(item=>append(item,0));
     return rows;
   }
+  const typeName=item=>item.type==='group'?'分组':item.type==='todo'?'任务':item.type==='link'?'链接':item.type==='image'?'图片':item.type==='bullet'?'列表':item.type==='text'?'文本':'分隔';
+  const stamp=value=>value?new Date(value).toLocaleString('zh-CN',{hour12:false,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}):'';
   const metadata=item=>[
     item.priority==='urgent'?'!! 紧急':item.priority==='high'?'! 重要':'',
     item.owner?'@'+item.owner:'',...(item.people||'').split(/[,，]\s*/).filter(Boolean).map(name=>'@'+name),
@@ -101,8 +103,16 @@ function ArchiveModal({open,items,onClose}){
     ...(item.dependencies||[]).map(id=>'前置 '+(byId.get(id)?.title||id)),...(item.related||[]).map(id=>'关联 '+(byId.get(id)?.title||id))
   ].filter(Boolean);
   return <div className="archive-backdrop" onPointerDown={onClose}><div className="archive-modal" role="dialog" aria-label="归档内容" onPointerDown={event=>event.stopPropagation()}>
-    <div className="archive-head"><strong>归档</strong><button onClick={onClose} aria-label="关闭归档">×</button></div>
-    {domains.map(domain=>{const rows=rowsFor(domain);return <section className="archive-section" key={domain}><h2>{domain.toUpperCase()} <span>{rows.length}</span></h2>{rows.length?<div className="archive-list">{rows.map(({item,depth})=><div className="archive-item" key={item.id} style={{'--archive-depth':depth}}><span className="archive-status">{item.status==='done'?'完成':'移除'}</span><span className="archive-title">{inline(titleOf(item))}{item.content&&<span className="archive-note">{inline(item.content)}</span>}{metadata(item).length>0&&<span className="archive-tags">{metadata(item).map((value,index)=><span key={index}>{value}</span>)}</span>}</span><time title={'归档于 '+new Date(item.archivedAt).toLocaleString('zh-CN')}>{new Date(archiveTime(item)).toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'})}</time></div>)}</div>:<p className="archive-empty">暂无归档</p>}</section>})}
+    <div className="archive-head"><div><strong>归档</strong><span className="archive-total">{items.length} 条</span></div><button onClick={onClose} aria-label="关闭归档">×</button></div>
+    {domains.map(domain=>{const rows=rowsFor(domain);return <section className="archive-section" key={domain}><h2><span className={'archive-domain-dot archive-domain-'+domain.replace(/\W/g,'').toLowerCase()}/>{domain==='Glean & Idea'?'GLEAN & IDEA':domain.toUpperCase()} <span>{rows.length}</span></h2>{rows.length?<div className="archive-list">{rows.map(({item,depth})=><article className="archive-item" key={item.id} style={{'--archive-depth':depth}}>
+      <div className="archive-item-head"><span className={'archive-status archive-status-'+item.status}><i/>{item.status==='done'?'已完成':item.status==='removed'?'已取消':'已归档'}</span><span className="archive-type">{typeName(item)}</span>{item.type==='todo'&&['day','week'].includes(item.loop)&&<span className={'loop-label loop-'+item.loop}>{item.loop==='day'?'每日':'每周'}</span>}{item.type==='todo'&&['day','week'].includes(item.loop)&&<span className="archive-count">该周期完成 · 累计 {item.loopCompletedCount||0} 次</span>}<time title={'归档时间 '+stamp(item.archivedAt)}>{stamp(archiveTime(item))}</time></div>
+      <div className="archive-title">{item.prefixLabel&&<span className="prefix-label">{item.prefixLabel}</span>}{inline(titleOf(item))}</div>
+      {item.content&&<p className="archive-note">{inline(item.content)}</p>}
+      {item.image&&<img className="archive-image" src={item.image} alt={item.title||'归档图片'}/>}
+      {item.url&&<a className="archive-link" href={item.url} target="_blank" rel="noreferrer">{item.url}</a>}
+      {metadata(item).length>0&&<div className="archive-tags">{metadata(item).map((value,index)=><span key={index}>{value}</span>)}</div>}
+      <div className="archive-dates"><span>创建 {stamp(item.createdAt)||'—'}</span>{item.updatedAt&&<span>更新 {stamp(item.updatedAt)}</span>}{item.completedAt&&<span>完成 {stamp(item.completedAt)}</span>}{item.removedAt&&<span>取消 {stamp(item.removedAt)}</span>}</div>
+    </article>)}</div>:<p className="archive-empty">暂无归档</p>}</section>})}
   </div></div>;
 }
 const HEATMAP_DOMAINS=[['Work','WORK'],['Daily','DAILY'],['Life','LIFE'],['Glean & Idea','GLEAN']];
@@ -135,10 +145,11 @@ function Heatmap({items,open,onClose}){
 function EntryContent({item,items=[]}) {
   const divider=item.type==='divider',done=item.status==='done',removed=item.status==='removed';
   const overdue=item.type==='todo'&&item.dueDate&&item.dueDate<new Date().toLocaleDateString('en-CA')&&!done&&!removed;
+  const loop=item.type==='todo'&&['day','week'].includes(item.loop)?item.loop:'';
   const statusDate=removed?item.removedAt:done?item.completedAt:null;
   const statusCaption=statusDate?new Date(statusDate).toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'})+(removed?'取消':'完成'):'';
   return <>
-          <span className="entry-title">{divider?<span className="md-rule"/>:<>{item.prefixLabel&&<span className="prefix-label">{item.prefixLabel}</span>}{inline(titleOf(item))}</>}</span>
+          <span className="entry-title">{divider?<span className="md-rule"/>:<>{item.prefixLabel&&<span className="prefix-label">{item.prefixLabel}</span>}{loop&&<span className={'loop-label loop-'+loop}>{loop==='day'?'每日':'每周'}</span>}{inline(titleOf(item))}</>}</span>
           {item.content&&item.title&&<span className="entry-note">{item.content.split('\n').map((line,index)=><span className="note-line" key={index}>{inline(line)}</span>)}</span>}
           {item.image&&<img className="thumb" src={item.image} alt={item.title||'条目图片'}/>}
           <span className="entry-meta">
@@ -149,6 +160,7 @@ function EntryContent({item,items=[]}) {
             {item.dueDate&&<span className={overdue?'overdue':'date'}>↗ {item.dueDate}</span>}
             {item.status==='waiting'&&<span>等待中</span>}{item.status==='doing'&&<span>进行中</span>}
             {item.stage&&<span>{item.stage}</span>}
+            {loop&&<span className={'loop-count loop-count-'+loop}>{item.loopCompletedCount||0} 次</span>}
             {item.planDate&&<span>计划 {item.planDate}</span>}{item.followupDate&&<span>跟进 {item.followupDate}</span>}
             {Object.entries(item.custom||{}).filter(([,value])=>value).map(([key,value])=><span key={key}>{key} · {value}</span>)}
             {(item.dependencies||[]).map(id=><span key={id} className="relation">← {items.find(entry=>entry.id===id)?.title||'前置任务'}</span>)}
@@ -240,11 +252,8 @@ function App(){
   const [inboxText,setInboxText]=useState(()=>readStored('rafa-inbox-text','')),[inboxBatches,setInboxBatches]=useState(()=>readStored('rafa-inbox-batches',[])),[inboxBusy,setInboxBusy]=useState(false),[inboxAdopting,setInboxAdopting]=useState(''),[inboxPhase,setInboxPhase]=useState(''),[inboxOpen,setInboxOpen]=useState(false);
   const [currentTaskId,setCurrentTaskId]=useState(()=>readStored('rafa-current-task',''));
   const autoProcessed=useRef(readStored('rafa-inbox-auto-source',''));
-  const [daily,setDaily]=useState({date:'',timeZone:'Asia/Shanghai',items:[]}),[dailyText,setDailyText]=useState(''),[dailyBusy,setDailyBusy]=useState(''),[dailyAdding,setDailyAdding]=useState(false),[dailyEditing,setDailyEditing]=useState(null),[dailyEditText,setDailyEditText]=useState(''),[dailyConfirmDelete,setDailyConfirmDelete]=useState('');
-
   const [layout,setLayout]=useState(readLayout);
   const board=useRef(null),beforePositions=useRef(null),workScrollRefs=useRef({left:null,right:null}),scrollSaveFrame=useRef(0),scrollRestored=useRef(false);
-  const dailyLoad=useRef(null);
   useLayoutEffect(()=>{
     const previous=beforePositions.current;beforePositions.current=null;
     if(!previous||prefersReducedMotion())return;
@@ -282,58 +291,13 @@ function App(){
     if(!prefersReducedMotion())setTimeout(()=>{const read=node.querySelector('.entry-read');if(read)read.animate([{backgroundColor:'#c9e3c6'},{backgroundColor:getComputedStyle(read).backgroundColor}],{duration:1100,easing:'ease-out'});},300);
   }
 
-  async function loadDaily({quiet=false}={}){
-    if(dailyLoad.current)return dailyLoad.current;
-    const task=(async()=>{
-      try{const state=await api('/api/daily');setDaily(state);return state;}
-      catch(e){if(!quiet)setError(e.message);return null;}
-      finally{dailyLoad.current=null;}
-    })();
-    dailyLoad.current=task;
-    return task;
-  }
-  async function addDaily(){
-    const text=dailyText;
-    if(!text.trim()||dailyBusy)return;
-    setDailyBusy('add');setError('');
-    try{const result=await api('/api/daily','POST',{text});setDaily(result.state);setDailyText('');setDailyAdding(false);}
-    catch(e){setError(e.message,addDaily);}
-    finally{setDailyBusy('');}
-  }
-  async function toggleDaily(item){
-    if(dailyBusy)return;
-    setDailyBusy(item.id);setError('');
-    const optimistic={...daily,items:daily.items.map(entry=>entry.id===item.id?{...entry,completed:!entry.completed,completedCount:entry.completedCount+(entry.completed?-1:1)}:entry)};
-    setDaily(optimistic);
-    try{setDaily(await api('/api/daily/'+item.id+'/complete','POST',{completed:!item.completed}));}
-    catch(e){setDaily(daily);setError(e.message,()=>toggleDaily(item));}
-    finally{setDailyBusy('');}
-  }
-  async function startDailyEdit(item){setDailyEditing(item.id);setDailyEditText(item.text);}
-  async function saveDailyEdit(item){
-    const text=dailyEditText;
-    if(!text.trim()||dailyBusy)return;
-    setDailyBusy(item.id);setError('');
-    try{const result=await api('/api/daily/'+item.id,'PUT',{text});setDaily(result.state);setDailyEditing(null);setDailyEditText('');}
-    catch(e){setError(e.message);}
-    finally{setDailyBusy('');}
-  }
-  async function deleteDaily(item){
-    if(dailyConfirmDelete!==item.id){setDailyConfirmDelete(item.id);return;}
-    setDailyConfirmDelete('');
-    if(dailyBusy)return;
-    setDailyBusy(item.id);setError('');
-    try{setDaily(await api('/api/daily/'+item.id,'DELETE'));}
-    catch(e){setError(e.message);}
-    finally{setDailyBusy('');}
-  }
   useEffect(()=>{try{localStorage.setItem('rafa-layout',JSON.stringify(layout));}catch{}},[layout]);
   useEffect(()=>{
     if(!authenticated)return;
-    const check=()=>{if(document.visibilityState==='visible')loadDaily({quiet:true});};
-    const timer=setInterval(check,30000);
-    window.addEventListener('focus',check);document.addEventListener('visibilitychange',check);
-    return ()=>{clearInterval(timer);window.removeEventListener('focus',check);document.removeEventListener('visibilitychange',check);};
+    const refresh=()=>{if(document.visibilityState!=='visible')return;api('/api/entries').then(entries=>{itemsRef.current=entries;setItems(entries);}).catch(()=>{});};
+    const timer=setInterval(refresh,30000);
+    window.addEventListener('focus',refresh);document.addEventListener('visibilitychange',refresh);
+    return ()=>{clearInterval(timer);window.removeEventListener('focus',refresh);document.removeEventListener('visibilitychange',refresh);};
   },[authenticated]);
   useEffect(()=>{
     if(!entriesLoaded||scrollRestored.current)return;
@@ -379,7 +343,7 @@ function App(){
       setZen(null);setZenConfirm('');
     }catch(error){setError(error.message);}finally{markPending('zen',false);}
   }
-  useEffect(()=>{api('/api/auth/status').then(status=>{setAuthenticated(status.authenticated);if(status.authenticated){api('/api/entries').then(entries=>{itemsRef.current=entries;setItems(entries);setEntriesLoaded(true);}).catch(e=>setError(e.message));api('/api/archive').then(setArchived).catch(e=>setError(e.message));loadDaily();}}).catch(e=>setError(e.message)).finally(()=>setLoading(false));},[]);
+  useEffect(()=>{api('/api/auth/status').then(status=>{setAuthenticated(status.authenticated);if(status.authenticated){api('/api/entries').then(entries=>{itemsRef.current=entries;setItems(entries);setEntriesLoaded(true);}).catch(e=>setError(e.message));api('/api/archive').then(setArchived).catch(e=>setError(e.message));}}).catch(e=>setError(e.message)).finally(()=>setLoading(false));},[]);
   useEffect(()=>()=>{drag.current?.cleanup?.();},[]);
   useEffect(()=>{
     if(!draft)return;
@@ -676,27 +640,6 @@ function App(){
       try{localStorage.setItem('rafa-work-scroll',JSON.stringify(value));}catch{}
     });
   }
-  function dailyColumn(){
-    const completed=daily.items.filter(item=>item.completed).length;
-    return <section className="column daily-column" data-domain="Daily" aria-label="DAILY">
-      <div className="column-watermark" aria-hidden="true">DAILY</div>
-      <div className="column-head"><h1>DAILY</h1><span>{completed}/{daily.items.length}</span><span className="daily-date">{daily.date||''}</span></div>
-      <div className="column-scroll daily-scroll">
-        <div className="daily-list">
-          {daily.items.length?daily.items.map(item=><div className={'daily-entry '+(item.completed?'is-done':'')} key={item.id}>
-            <button className={'checkbox '+(item.completed?'checked':'')} aria-label={item.completed?'取消今天的完成':'完成今天的每日事项'} disabled={dailyBusy===item.id} onClick={()=>toggleDaily(item)}>{item.completed&&<Check size={11} weight="bold"/>}</button>
-            {dailyEditing===item.id?<form className="daily-edit" onSubmit={event=>{event.preventDefault();saveDailyEdit(item);}}>
-              <input autoFocus value={dailyEditText} onChange={event=>setDailyEditText(event.target.value)} onKeyDown={event=>{if(event.key==='Escape'){event.preventDefault();setDailyEditing(null);}}} aria-label="编辑每日事项"/>
-              <button type="submit" disabled={!dailyEditText.trim()||dailyBusy===item.id}>保存</button>
-            </form>:<button className="daily-text" onClick={()=>startDailyEdit(item)} title="点击编辑">{item.text}</button>}
-            <span className="daily-count">{item.completedCount} 次</span>
-            <div className="daily-actions"><button className={dailyConfirmDelete===item.id?'confirm-delete':''} disabled={dailyBusy===item.id} onClick={()=>deleteDaily(item)} aria-label={dailyConfirmDelete===item.id?'再次点击确认删除':'删除每日事项'} title={dailyConfirmDelete===item.id?'再次点击确认删除':'删除'}>{dailyConfirmDelete===item.id?'确认删除':<Trash size={13}/>}</button></div>
-          </div>):<p className="daily-empty">还没有每日事项。下面添加一条，每天 0 点会重新变为未完成。</p>}
-        </div>
-        <div className="add-row daily-add">{dailyAdding?<form onSubmit={event=>{event.preventDefault();addDaily();}}><input autoFocus value={dailyText} onChange={event=>setDailyText(event.target.value)} onKeyDown={event=>{if(event.key==='Escape'){event.preventDefault();setDailyAdding(false);setDailyText('');}}} placeholder="写一条每日事项…" aria-label="新增每日事项"/><button type="submit" disabled={!dailyText.trim()||dailyBusy==='add'}>添加</button><button type="button" onClick={()=>{setDailyAdding(false);setDailyText('');}}>取消</button></form>:<button onClick={()=>setDailyAdding(true)} aria-label="新增每日事项"><Plus size={14}/><span>添加每日事项…</span></button>}</div>
-      </div>
-    </section>;
-  }
   function workPane(pane,label){
     const endDrop=drop?.domain==='Work'&&drop.placement==='end'&&(drop.workPane||'left')===pane;
     return <div className={'work-col '+(endDrop?'is-end-drop':'')} data-work-pane={pane} onDragOver={event=>{if(event.dataTransfer.types.includes('Files'))event.preventDefault();}} onDrop={event=>{const file=Array.from(event.dataTransfer.files).find(file=>file.type.startsWith('image/'));if(file){event.preventDefault();upload(file,{domain:'Work',type:'image',parentId:'',workPane:pane});}}}>
@@ -714,7 +657,7 @@ function App(){
   return <div className="app">
     <header className="topbar"><a className="brand" href="/" aria-label="RafaTodo 首页"><img className="brand-cat" src="/rafa-cat.png" alt=""/>Rafa<span>todo</span><i/></a><div className="top-tools"><button className="archive-view" onClick={openArchive} aria-label="查看归档" title="查看归档"><Archive size={18}/></button><button className={'heatmap-trigger '+(heatmapOpen?'active':'')} onClick={()=>setHeatmapOpen(value=>!value)} aria-label="打开活动热力图" title="活动热力图"><ChartBar size={18}/></button></div><Heatmap items={items} open={heatmapOpen} onClose={()=>setHeatmapOpen(false)}/><ArchiveModal open={archiveOpen} items={archived} onClose={()=>setArchiveOpen(false)}/></header>
     <ErrorNotice message={error} retry={retryAction} onClose={()=>setError('')}/>
-    <main ref={board} className="board" style={{'--work':layout.work+'%','--daily':layout.daily+'%','--life':layout.life+'%','--glean':Math.max(10,100-layout.total)+'%'}}>{dailyColumn()}{domains.map(domain=><section className={'column '+(drop?.domain===domain&&drop.placement==='end'?'drop-column':'')} key={domain} data-domain={domain} aria-label={domain}
+    <main ref={board} className="board" style={{'--work':layout.work+'%','--daily':layout.daily+'%','--life':layout.life+'%','--glean':Math.max(10,100-layout.total)+'%'}}>{domains.map(domain=><section className={'column '+(drop?.domain===domain&&drop.placement==='end'?'drop-column':'')} key={domain} data-domain={domain} aria-label={domain}
       onDragOver={event=>{if(event.dataTransfer.types.includes('Files'))event.preventDefault();}}
       onDrop={event=>{const file=Array.from(event.dataTransfer.files).find(file=>file.type.startsWith('image/'));if(file){event.preventDefault();upload(file,domain);}}}>
       <div className="column-watermark" aria-hidden="true">{domain==='Glean & Idea'?<>GLEAN<span>& IDEA</span></>:domain.toUpperCase()}</div>

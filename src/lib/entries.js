@@ -1,4 +1,17 @@
-export const domains=['Work','Life','Glean & Idea'];
+export const domains=['Work','Daily','Life','Glean & Idea'];
+
+const loopDateFormatter=timeZone=>new Intl.DateTimeFormat('en-CA',{timeZone,year:'numeric',month:'2-digit',day:'2-digit'});
+
+// A loop belongs to a calendar period, not to the task's lifetime. Day loops
+// roll over at local midnight; week loops roll over on Monday midnight.
+export function loopPeriodKey(loop,value=new Date(),timeZone){
+  if(loop!=='day'&&loop!=='week')return '';
+  const date=timeZone?loopDateFormatter(timeZone).format(value):value.toLocaleDateString('en-CA');
+  if(loop==='day')return date;
+  const monday=new Date(date+'T00:00:00Z');
+  monday.setUTCDate(monday.getUTCDate()-((monday.getUTCDay()+6)%7));
+  return monday.toISOString().slice(0,10);
+}
 
 // Avoid a negative lookbehind here: WebKit before iOS 16.4 parses (?<! as a
 // named group and throws "invalid group specifier name", which kills the bundle.
@@ -19,12 +32,17 @@ export function parseLine(raw,base={},entries=[]){
   const mark=text.match(/^-?\s*\[([ xX-])\]\s*/);
   if(mark){status=mark[1]==='-'?'removed':/x/i.test(mark[1])?'done':'open';text=text.slice(mark[0].length);}
   else if(/^>\s?/.test(text)){type='text';typeExplicit=true;text=text.replace(/^>\s?/,'');}
-  const metadata={owner:'',people:'',tags:'',priority:'normal',dueDate:'',planDate:'',followupDate:'',stage:'',prefixLabel:'',custom:{},dependencies:[],related:[]};
+  const metadata={owner:'',people:'',tags:'',priority:'normal',dueDate:'',planDate:'',followupDate:'',stage:'',prefixLabel:'',loop:'',loopCompletedCount:Number.isFinite(base.loopCompletedCount)?base.loopCompletedCount:0,loopCompletionKey:base.loopCompletionKey||'',loopPeriod:base.loopPeriod||'',custom:{},dependencies:[],related:[]};
+  // A loop marker is task-only metadata. It is removed from the title wherever
+  // it appears, so it also works before or after a "%label" prefix.
+  const consumeLoop=()=>{if(type!=='todo')return;const found=text.match(/(?:^|\s)!loop-(day|week)(?=\s|$)/);if(!found)return;metadata.loop=found[1];text=(text.slice(0,found.index)+' '+text.slice(found.index+found[0].length)).trim();};
+  consumeLoop();
   const prefix=text.match(/^%([\p{L}\p{N}_/-]+)(?:\s+|$)/u);
   if(prefix){metadata.prefixLabel=prefix[1];text=text.slice(prefix[0].length);}
   // A prefix is display metadata, not part of the title. Also removes a
   // duplicated "%label" left by older edits or direct API writes.
   if(metadata.prefixLabel)text=text.replace(new RegExp('^%'+metadata.prefixLabel.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'(?:\\s+|$)','u'),'');
+  consumeLoop();
   const people=[],tags=[];
   // Formatting and link destinations are content, never metadata.
   const protectedParts=[];
@@ -50,6 +68,7 @@ export function parseLine(raw,base={},entries=[]){
     consume(/(?:^|\s)(?:sig|icon):([^\s]+)(?=\s|$)/g,(_,value)=>{signature=value;});
     consume(/(?:^|\s)(?:tone|color):([a-z-]+)(?=\s|$)/g,(_,value)=>{tone=value;});
   }
+  consumeLoop();
   text=text.replace(/\u0000(\d+)\u0000/g,(_,index)=>protectedParts[Number(index)]).trim();
   const image=text.match(/!\[([^\]]*)\]\(([^\s)]+)\)/);
   const link=matchLink(text);
@@ -59,6 +78,7 @@ export function parseLine(raw,base={},entries=[]){
   else if(link&&text===link[0]&&type==='todo'&&!mark&&!typeExplicit&&!(base.id&&base.type==='todo')){type='link';url=link[2];text=link[1];}
   else if(bareUrl&&type==='todo'){url=bareUrl[0];if(!mark&&!typeExplicit&&!(base.id&&base.type==='todo'))type='link';}
   metadata.owner=people[0]||'';metadata.people=people.slice(1).join(', ');metadata.tags=[...new Set(tags)].join(', ');
+  if(type!=='todo'||!['day','week'].includes(metadata.loop)){metadata.loop='';metadata.loopCompletedCount=0;metadata.loopCompletionKey='';metadata.loopPeriod='';}
   const lines=text.trim().split('\n');
   return {...base,...metadata,type,status,signature,tone,title:lines.shift()?.trim()||'',content:lines.join('\n').trim(),url,image:imageUrl};
 }
@@ -90,6 +110,7 @@ export function toLine(item,entries=[],{hideTaskPrefix=false}={}){
   if(item.tags)tokens.push(...item.tags.split(/[,，]\s*/).filter(Boolean).map(tag=>'#'+tag));
   if(item.priority==='high')tokens.push('!');
   if(item.priority==='urgent')tokens.push('!!');
+  if(item.type==='todo'&&['day','week'].includes(item.loop))tokens.push('!loop-'+item.loop);
   if(['doing','waiting'].includes(item.status))tokens.push('~'+item.status);
   if(item.type==='group'&&item.signature)tokens.push('sig:'+item.signature);
   if(item.type==='group'&&item.tone)tokens.push('tone:'+item.tone);

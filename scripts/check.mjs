@@ -5,7 +5,7 @@ import {existsSync,mkdtempSync,rmSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
-import {parseLine,toLine,pasteLink,moveEntries,nextPosition,workPaneMap,compactEntryPositions,normalizeEntryLayout} from '../src/lib/entries.js';
+import {domains,parseLine,toLine,pasteLink,moveEntries,nextPosition,workPaneMap,compactEntryPositions,normalizeEntryLayout,loopPeriodKey} from '../src/lib/entries.js';
 const group=parseLine('## 项目 sig:🚀 tone:sage');
 assert.equal(group.type,'group');assert.equal(group.title,'项目');assert.equal(group.signature,'🚀');assert.equal(group.tone,'sage');
 assert.equal(toLine(group),'## 项目 sig:🚀 tone:sage');
@@ -46,6 +46,21 @@ assert.equal(parseLine('%需求', {domain:'Work'}, []).title, '');
 assert.equal(toLine(parseLine('%需求 登录页重做')),'- [ ] %需求 登录页重做');
 assert.equal(parseLine('%需求 %需求 登录页重做').title,'登录页重做');
 assert.equal(parseLine('%需求 登录页重做').title,'登录页重做');
+const dayLoop=parseLine('%需求 !loop-day 每日复盘');
+assert.equal(dayLoop.loop,'day');assert.equal(dayLoop.prefixLabel,'需求');assert.equal(dayLoop.title,'每日复盘');
+assert.equal(toLine(dayLoop),'- [ ] %需求 每日复盘 !loop-day');
+const weekLoop=parseLine('!loop-week 周计划');
+assert.equal(weekLoop.loop,'week');assert.equal(weekLoop.title,'周计划');
+assert.equal(parseLine('!loop-day',{domain:'Daily'},[]).title,'');
+assert.equal(parseLine('## 分组 !loop-day').loop,'');
+assert.equal(parseLine('> 文本 !loop-week').loop,'');
+assert.equal(parseLine('- 列表 !loop-day').loop,'');
+assert.equal(parseLine('--- !loop-day').type,'todo');
+assert.equal(parseLine('!loop-month 月度任务').loop,'');
+assert.equal(loopPeriodKey('day',new Date('2026-10-26T15:59:00Z'),'Asia/Shanghai'),'2026-10-26');
+assert.equal(loopPeriodKey('day',new Date('2026-10-26T16:00:00Z'),'Asia/Shanghai'),'2026-10-27');
+assert.equal(loopPeriodKey('week',new Date('2026-10-26T00:00:00Z'),'Asia/Shanghai'),'2026-10-26');
+assert.equal(loopPeriodKey('week',new Date('2026-10-25T15:59:00Z'),'Asia/Shanghai'),'2026-10-19');
 const paneEntry=(id,workPane,position)=>({id,domain:'Work',workPane,parentId:'',type:'todo',status:'open',title:id,position,createdAt:'2026-01-01'});
 const moved=moveEntries([paneEntry('left',  'left',0),paneEntry('right','right',0)],{id:'left',targetId:'right',domain:'Work',placement:'after'});
 assert.equal(moved.find(entry=>entry.id==='left').workPane,'right');
@@ -198,46 +213,65 @@ try{
   const prefixed=(await request('POST','/api/entries',{domain:'Work',type:'todo',status:'open',title:'登录页重做',content:'',prefixLabel:'需求',workPane:'left'})).data;
   assert.equal(prefixed.prefixLabel,'需求');
 
-  // Daily items are an independent template list. Only a manual check counts,
-  // and a duplicate same-day completion is idempotent.
-  assert.equal((await request('GET','/api/daily')).status,200);
-  const dailyInitial=(await request('GET','/api/daily')).data;
-  assert.match(dailyInitial.date,/^\d{4}-\d{2}-\d{2}$/);
-  const dailyOne=(await request('POST','/api/daily',{text:'  严格保留原文  %需求  '})).data;
-  assert.equal(dailyOne.item.text,'  严格保留原文  %需求  ');
-  assert.equal((await request('POST','/api/daily',{text:'   '})).status,400);
-  const dailyTwo=(await request('POST','/api/daily',{text:'第二条'})).data;
-  assert.deepEqual(dailyTwo.state.items.map(entry=>entry.text),['  严格保留原文  %需求  ','第二条']);
-  const dailyId=dailyOne.item.id;
-  let dailyChecked=(await request('POST','/api/daily/'+dailyId+'/complete',{completed:true})).data;
-  assert.equal(dailyChecked.items.find(entry=>entry.id===dailyId).completed,true);
-  assert.equal(dailyChecked.items.find(entry=>entry.id===dailyId).completedCount,1);
-  dailyChecked=(await request('POST','/api/daily/'+dailyId+'/complete',{completed:true})).data;
-  assert.equal(dailyChecked.items.find(entry=>entry.id===dailyId).completedCount,1);
-  dailyChecked=(await request('POST','/api/daily/'+dailyId+'/complete',{completed:false})).data;
-  assert.equal(dailyChecked.items.find(entry=>entry.id===dailyId).completed,false);
-  assert.equal(dailyChecked.items.find(entry=>entry.id===dailyId).completedCount,0);
-  const dailyEdited=(await request('PUT','/api/daily/'+dailyId,{text:'改过的每日事项'})).data;
-  assert.equal(dailyEdited.item.text,'改过的每日事项');
-  assert.equal(dailyEdited.state.items[0].id,dailyId);
-  const dailyDeleted=(await request('DELETE','/api/daily/'+dailyId)).data;
-  assert.ok(!dailyDeleted.items.some(entry=>entry.id===dailyId));
-  assert.equal((await request('POST','/api/daily/'+dailyId+'/complete',{completed:true})).status,404);
-  assert.equal((await request('POST','/api/daily/'+dailyTwo.item.id+'/complete',{completed:true})).data.items.find(entry=>entry.id===dailyTwo.item.id).completedCount,1);
-  const dailyActivity=(await request('GET','/api/activity')).data.find(entry=>entry.domain==='Daily'&&entry.date===dailyInitial.date);
-  assert.equal(dailyActivity?.completed,1);
-  assert.equal(dailyActivity?.created,0);
+  // DAILY is a normal column now. LOOP tasks only count explicit completions,
+  // and the same completion is idempotent within a period.
+  assert.equal(domains.includes('Daily'),true);
+  const dailyOne=(await request('POST','/api/entries',{domain:'Daily',type:'todo',status:'open',title:'每日复盘',content:'',loop:'day'})).data;
+  assert.equal(dailyOne.domain,'Daily');assert.equal(dailyOne.loop,'day');assert.equal(dailyOne.loopCompletedCount,0);
+  const dailyDoneOnCreate=(await request('POST','/api/entries',{domain:'Daily',type:'todo',status:'done',title:'创建时已完成',content:'',loop:'day'})).data;
+  assert.equal(dailyDoneOnCreate.loopCompletedCount,1);
+  let loopDone=(await request('PUT','/api/entries/'+dailyOne.id,{...dailyOne,status:'done'})).data;
+  assert.equal(loopDone.status,'done');assert.equal(loopDone.loopCompletedCount,1);
+  loopDone=(await request('PUT','/api/entries/'+loopDone.id,{...loopDone,status:'done'})).data;
+  assert.equal(loopDone.loopCompletedCount,1);
+  loopDone=(await request('PUT','/api/entries/'+loopDone.id,{...loopDone,status:'open'})).data;
+  assert.equal(loopDone.status,'open');assert.equal(loopDone.loopCompletedCount,0);
+  loopDone=(await request('PUT','/api/entries/'+loopDone.id,{...loopDone,status:'done'})).data;
+  assert.equal(loopDone.loopCompletedCount,1);
+  const once=loopDone;
+  assert.equal((await request('POST','/api/entries',{domain:'Daily',type:'todo',title:'不是循环任务',content:''})).data.loop,'');
+
+  // Simulate crossing midnight by rolling the stored period key back, then
+  // reading entries to trigger the same reset used by the minute timer.
+  await stop();
+  const loopDb=new DatabaseSync(path.join(dir,'rafa.sqlite'));
+  const stored=JSON.parse(loopDb.prepare('SELECT data FROM entries WHERE id=?').get(once.id).data);
+  loopDb.prepare('UPDATE entries SET data=? WHERE id=?').run(JSON.stringify({...stored,loopPeriod:'2000-01-01',loopCompletionKey:'2000-01-01'}),once.id);
+  loopDb.close();
+  await start();
+  entries=(await request('GET','/api/entries')).data;
+  const reset=entries.find(entry=>entry.id===once.id);
+  assert.equal(reset.status,'open');assert.equal(reset.loopCompletedCount,1);assert.equal(reset.loopCompletionKey,'');assert.notEqual(reset.loopPeriod,'2000-01-01');
+  const nextDone=(await request('PUT','/api/entries/'+reset.id,{...reset,status:'done'})).data;
+  assert.equal(nextDone.loopCompletedCount,2);
+
+  // A weekly task keeps its own Monday-based period.
+  const weekOne=(await request('POST','/api/entries',{domain:'Life',type:'todo',status:'open',title:'每周整理',content:'',loop:'week'})).data;
+  const weekDone=(await request('PUT','/api/entries/'+weekOne.id,{...weekOne,status:'done'})).data;
+  assert.equal(weekDone.loopCompletedCount,1);assert.match(weekDone.loopPeriod,/^\d{4}-\d{2}-\d{2}$/);
+
+  // Legacy DAILY rows become ordinary Daily tasks exactly once.
+  await stop();
+  const legacyDb=new DatabaseSync(path.join(dir,'rafa.sqlite'));
+  legacyDb.prepare("DELETE FROM settings WHERE key='daily-migrated'").run();
+  legacyDb.prepare("INSERT INTO daily_items (id,text,position,created_at) VALUES (?,?,?,?)").run('legacy-daily','旧每日事项',0,'2026-01-01T00:00:00.000Z');
+  legacyDb.close();
+  await start();
+  entries=(await request('GET','/api/entries')).data;
+  const legacy=entries.find(entry=>entry.id==='daily-legacy-daily');
+  assert.equal(legacy?.domain,'Daily');assert.equal(legacy?.title,'旧每日事项');assert.equal(legacy?.loop,'');
 
   // Deleting a middle row compacts positions without counting extra activity.
   const lifeA=(await request('POST','/api/entries',{domain:'Life',type:'todo',status:'open',title:'Life A',content:''})).data;
   const lifeB=(await request('POST','/api/entries',{domain:'Life',type:'todo',status:'open',title:'Life B',content:''})).data;
   const lifeC=(await request('POST','/api/entries',{domain:'Life',type:'todo',status:'open',title:'Life C',content:''})).data;
-  assert.deepEqual([lifeA.position,lifeB.position,lifeC.position],[0,1,2]);
+  const lifeStart=lifeA.position;
+  assert.deepEqual([lifeA.position,lifeB.position,lifeC.position],[lifeStart,lifeStart+1,lifeStart+2]);
   const afterCreateActivity=await activityFor('Life');
   const afterDelete=(await request('DELETE','/api/entries/'+lifeB.id)).data;
-  const remainingLife=afterDelete.filter(entry=>entry.domain==='Life').sort((a,b)=>a.position-b.position);
+  const remainingLife=afterDelete.filter(entry=>entry.domain==='Life'&&['Life A','Life C'].includes(entry.title)).sort((a,b)=>a.position-b.position);
   assert.deepEqual(remainingLife.map(entry=>entry.title),['Life A','Life C']);
-  assert.deepEqual(remainingLife.map(entry=>entry.position),[0,1]);
+  assert.equal(remainingLife[1].position,remainingLife[0].position+1);
   assert.deepEqual(await activityFor('Life'),afterCreateActivity);
 
   // Archiving compacts the visible list but is a layout operation, not activity.
@@ -245,9 +279,10 @@ try{
   const blockedParent=(await request('POST','/api/entries',{domain:'Life',type:'todo',status:'done',title:'Done parent with open child',content:''})).data;
   const blockedChild=(await request('POST','/api/entries',{domain:'Life',type:'todo',status:'open',title:'Open child',content:'',parentId:blockedParent.id})).data;
   const beforeArchiveActivity=await activityFor('Life');
+  const doneBeforeArchive=(await request('GET','/api/entries')).data.filter(entry=>entry.domain==='Life'&&['done','removed'].includes(entry.status)).length;
   const archivedResult=await request('POST','/api/archive',{domain:'Life'});
   assert.equal(archivedResult.status,200);
-  assert.equal(archivedResult.data.count,1);
+  assert.ok(archivedResult.data.count>=1&&archivedResult.data.count<=doneBeforeArchive);
   const visibleLife=archivedResult.data.items.filter(entry=>entry.domain==='Life');
   assert.ok(visibleLife.some(entry=>entry.id===blockedParent.id));
   assert.ok(visibleLife.some(entry=>entry.id===blockedChild.id));

@@ -5,7 +5,7 @@ import { randomUUID, randomBytes, scryptSync, timingSafeEqual } from 'node:crypt
 import path from 'node:path';
 import * as entryUtils from './src/lib/entries.js';
 
-const {domains, moveEntries, nextPosition} = entryUtils;
+const {domains, moveEntries, nextPosition, loopPeriodKey} = entryUtils;
 const normalizeEntryLayout = typeof entryUtils.normalizeEntryLayout === 'function' ? entryUtils.normalizeEntryLayout : items => items;
 const compactEntryPositions = typeof entryUtils.compactEntryPositions === 'function' ? entryUtils.compactEntryPositions : items => items;
 const dataDir = process.env.DATA_DIR || './data';
@@ -93,7 +93,7 @@ function unarchivedEntries() {
 
 function archivedEntries() {
   return db.prepare("SELECT data FROM entries WHERE json_extract(data, '$.archivedAt') > ''").all()
-    .map(row => JSON.parse(row.data))
+    .map(row => normalizeLoopFields(JSON.parse(row.data)))
     .sort((a, b) => new Date(b.archivedAt) - new Date(a.archivedAt));
 }
 
@@ -150,6 +150,12 @@ function rowsForDomainAndDescendants(domain) {
   return [...rows.values()];
 }
 
+const LOOP_TIME_ZONE = process.env.LOOP_TIME_ZONE || process.env.DAILY_TIME_ZONE || 'Asia/Shanghai';
+
+function loopKey(item, now = new Date()) {
+  return loopPeriodKey(item.loop, now, LOOP_TIME_ZONE);
+}
+
 function startupMigration() {
   const rows = db.prepare('SELECT id, data FROM entries').all();
   const original = new Map();
@@ -157,7 +163,7 @@ function startupMigration() {
     const item = JSON.parse(row.data);
     original.set(item.id, row.data);
     if (item.domain === 'Glean' || item.domain === 'Idea') item.domain = 'Glean & Idea';
-    return item;
+    return normalizeLoopFields(item);
   });
   let normalized = migrated;
   try {
@@ -175,6 +181,41 @@ function startupMigration() {
 }
 
 startupMigration();
+
+// Preserve old DAILY checklists as ordinary Daily tasks once, then leave their
+// lifecycle to the same status and LOOP rules as every other column.
+function migrateLegacyDaily() {
+  if (db.prepare("SELECT 1 FROM settings WHERE key='daily-migrated'").get()) return;
+  const rows = db.prepare(`SELECT i.id,i.text,i.position,i.created_at AS createdAt,
+      (SELECT COUNT(*) FROM daily_completions c WHERE c.item_id=i.id) AS completedCount,
+      (SELECT MAX(completed_at) FROM daily_completions c WHERE c.item_id=i.id) AS lastCompletedAt
+    FROM daily_items i WHERE i.deleted_at='' ORDER BY i.position,i.created_at`).all();
+  transaction(() => {
+    for (const [index, row] of rows.entries()) {
+      const id = 'daily-' + row.id;
+      const complete = Number(row.completedCount) > 0;
+      const item = normalizeLoopFields({
+        id, domain: 'Daily', type: 'todo', status: complete ? 'done' : 'open',
+        title: row.text, content: '', prefixLabel: '', loop: '', loopCompletedCount: 0,
+        position: index, createdAt: row.createdAt, updatedAt: row.lastCompletedAt || row.createdAt,
+        completedAt: complete ? row.lastCompletedAt || row.createdAt : null, removedAt: null,
+        sourceId: row.id
+      });
+      db.prepare('INSERT OR IGNORE INTO entries VALUES (?,?)').run(id, JSON.stringify(item));
+    }
+    db.prepare("INSERT INTO settings (key,value) VALUES ('daily-migrated','1') ON CONFLICT(key) DO UPDATE SET value='1'").run();
+  });
+  if (rows.length) console.log(`[startup] 已将 ${rows.length} 条 DAILY 事项转换为普通任务`);
+}
+
+migrateLegacyDaily();
+setInterval(() => {
+  try {
+    rolloverLoops();
+  } catch (error) {
+    console.error('[loop] 自动重置失败:', error.message);
+  }
+}, 60000).unref();
 
 const app = express();
 app.set('trust proxy', 'loopback');
@@ -321,78 +362,74 @@ function pinCount(domain, excludeId = '') {
   return db.prepare("SELECT COUNT(*) AS count FROM entries WHERE json_extract(data, '$.domain')=? AND json_extract(data, '$.archivedAt') IS NULL AND json_extract(data, '$.pinnedAt') > '' AND id<>?").get(domain, excludeId).count;
 }
 
-const DAILY_TIME_ZONE = process.env.DAILY_TIME_ZONE || 'Asia/Shanghai';
-const dailyDateFormatter = new Intl.DateTimeFormat('en-CA', {
-  timeZone: DAILY_TIME_ZONE,
-  year: 'numeric',
-  month: '2-digit',
-  day: '2-digit'
-});
-
-function dailyDate(value = new Date()) {
-  return dailyDateFormatter.format(value);
-}
-
-function dailyState() {
-  const today = dailyDate();
-  const rows = db.prepare(`
-    SELECT i.id,i.text,i.position,i.created_at AS createdAt,i.deleted_at AS deletedAt,
-      (SELECT COUNT(*) FROM daily_completions c WHERE c.item_id=i.id) AS completedCount,
-      (SELECT COUNT(*) FROM daily_completions c WHERE c.item_id=i.id AND c.date=?) AS completedToday,
-      (SELECT MAX(completed_at) FROM daily_completions c WHERE c.item_id=i.id) AS lastCompletedAt
-    FROM daily_items i
-    WHERE i.deleted_at=''
-    ORDER BY i.position,i.created_at
-  `).all(today);
-  return {
-    date: today,
-    timeZone: DAILY_TIME_ZONE,
-    items: rows.map(row => ({
-      id: row.id,
-      text: row.text,
-      position: row.position,
-      createdAt: row.createdAt,
-      completed: Boolean(row.completedToday),
-      completedCount: row.completedCount,
-      lastCompletedAt: row.lastCompletedAt || ''
-    }))
-  };
-}
-
-function readDailyItem(id) {
-  return db.prepare("SELECT id,text,position,created_at AS createdAt,deleted_at AS deletedAt FROM daily_items WHERE id=? AND deleted_at=''").get(id);
-}
-
-function nextDailyPosition() {
-  const row = db.prepare('SELECT MAX(position) AS position FROM daily_items WHERE deleted_at=?').get('');
-  return Number.isFinite(row?.position) ? row.position + 1 : 0;
-}
-
-function insertDailyItem(text) {
-  const now = new Date().toISOString();
-  const item = {id: randomUUID(), text, position: nextDailyPosition(), createdAt: now};
-  db.prepare('INSERT INTO daily_items (id,text,position,created_at) VALUES (?,?,?,?)').run(item.id, item.text, item.position, item.createdAt);
+function normalizeLoopFields(item, now = new Date()) {
+  if (item.type !== 'todo' || !['day', 'week'].includes(item.loop)) {
+    item.loop = '';
+    item.loopCompletedCount = 0;
+    item.loopCompletionKey = '';
+    item.loopPeriod = '';
+    return item;
+  }
+  item.loopCompletedCount = Math.max(0, Number(item.loopCompletedCount) || 0);
+  item.loopCompletionKey = typeof item.loopCompletionKey === 'string' ? item.loopCompletionKey : '';
+  item.loopPeriod = typeof item.loopPeriod === 'string' ? item.loopPeriod : '';
+  const period = loopKey(item, now);
+  const previousPeriod = item.loopPeriod;
+  if (item.loopPeriod !== period) {
+    item.loopPeriod = period;
+    // Archived rows are a historical record; never reopen them on rollover.
+    if (!item.archivedAt && item.status !== 'removed') {
+      item.status = 'open';
+      item.completedAt = null;
+      // Keep the recorded count, but never carry the old period's completion
+      // marker into a new period where it could suppress the next count.
+      if (item.loopCompletionKey && item.loopCompletionKey !== period) item.loopCompletionKey = '';
+      if (!previousPeriod && item.loopCompletedCount === 0) item.loopCompletionKey = '';
+    }
+  }
   return item;
 }
 
-function normalizeDailyText(value) {
-  if (typeof value !== 'string') throw new Error('请填写每日事项');
-  const text = value;
-  if (!text.trim()) throw new Error('请填写每日事项');
-  if (text.length > 2000) throw new Error('每日事项不能超过 2000 个字符');
-  return text;
+// Reset is based on the period key stored on the task, so midnight rollover is
+// idempotent and a completion from the previous period can never be counted twice.
+function rolloverLoops(now = new Date()) {
+  const rows = db.prepare("SELECT id,data FROM entries WHERE json_extract(data, '$.archivedAt') IS NULL AND json_extract(data, '$.type')='todo' AND json_extract(data, '$.loop') IN ('day','week')").all();
+  const changed = [];
+  for (const row of rows) {
+    const item = JSON.parse(row.data);
+    const before = JSON.stringify(item);
+    normalizeLoopFields(item, now);
+    if (JSON.stringify(item) !== before) {
+      db.prepare('UPDATE entries SET data=? WHERE id=?').run(JSON.stringify(item), item.id);
+      changed.push(item);
+    }
+  }
+  return changed;
 }
 
-function toggleDailyCompletion(id, completed) {
-  const item = readDailyItem(id);
-  if (!item) return null;
-  const date = dailyDate();
-  if (completed) {
-    db.prepare('INSERT OR IGNORE INTO daily_completions (item_id,date,completed_at) VALUES (?,?,?)').run(id, date, new Date().toISOString());
-  } else {
-    db.prepare('DELETE FROM daily_completions WHERE item_id=? AND date=?').run(id, date);
+function applyLoopCompletion(item, previous, now = new Date()) {
+  if (item.type !== 'todo' || !['day', 'week'].includes(item.loop)) {
+    item.loop = '';
+    item.loopCompletedCount = 0;
+    item.loopCompletionKey = '';
+    item.loopPeriod = '';
+    return item;
   }
-  return dailyState();
+  const period = loopKey(item, now);
+  const previousKey = typeof previous?.loopCompletionKey === 'string' ? previous.loopCompletionKey : '';
+  item.loopPeriod = period;
+  item.loopCompletedCount = Math.max(0, Number(item.loopCompletedCount) || 0);
+  item.loopCompletionKey = typeof item.loopCompletionKey === 'string' ? item.loopCompletionKey : '';
+  if (item.status === 'done') {
+    if (item.loopCompletionKey !== period) {
+      item.loopCompletedCount += 1;
+      item.loopCompletionKey = period;
+    }
+  } else if (previousKey && item.loopCompletionKey === previousKey) {
+    item.loopCompletedCount = Math.max(0, item.loopCompletedCount - 1);
+    item.loopCompletionKey = '';
+  }
+  return item;
 }
 
 function uploadFilesIn(item) {
@@ -437,40 +474,10 @@ app.delete('/api/entries/:id', (req, res) => {
   res.json(unarchivedEntries());
 });
 
-app.get('/api/daily', (req, res) => {
-  res.json(dailyState());
+app.get('/api/entries', (req, res) => {
+  rolloverLoops();
+  res.json(unarchivedEntries());
 });
-app.post('/api/daily', (req, res) => {
-  try {
-    const item = insertDailyItem(normalizeDailyText(req.body?.text));
-    res.json({item, state: dailyState()});
-  } catch (error) {
-    res.status(400).json({error: error.message});
-  }
-});
-app.put('/api/daily/:id', (req, res) => {
-  const item = readDailyItem(req.params.id);
-  if (!item) return res.status(404).json({error: '每日事项不存在'});
-  try {
-    const text = normalizeDailyText(req.body?.text);
-    db.prepare('UPDATE daily_items SET text=? WHERE id=?').run(text, item.id);
-    res.json({item: {...item, text}, state: dailyState()});
-  } catch (error) {
-    res.status(400).json({error: error.message});
-  }
-});
-app.delete('/api/daily/:id', (req, res) => {
-  const item = readDailyItem(req.params.id);
-  if (!item) return res.status(404).json({error: '每日事项不存在'});
-  db.prepare('UPDATE daily_items SET deleted_at=? WHERE id=?').run(new Date().toISOString(), item.id);
-  res.json(dailyState());
-});
-app.post('/api/daily/:id/complete', (req, res) => {
-  const state = toggleDailyCompletion(req.params.id, Boolean(req.body?.completed));
-  if (!state) return res.status(404).json({error: '每日事项不存在'});
-  res.json(state);
-});
-app.get('/api/entries', (req, res) => res.json(unarchivedEntries()));
 app.get('/api/archive', (req, res) => res.json(archivedEntries()));
 app.post('/api/archive', (req, res) => {
   const domain = req.body?.domain;
@@ -510,13 +517,7 @@ app.get('/api/activity', (req, res) => {
   const to = typeof req.query.to === 'string' ? req.query.to : '';
   const domain = domains.includes(req.query.domain) ? req.query.domain : '';
   const rows = db.prepare(`SELECT date,domain,created_count AS created,completed_count AS completed,updated_count AS updated,removed_count AS removed FROM activity_daily WHERE (?='' OR date>=?) AND (?='' OR date<=?) AND (?='' OR domain=?) ORDER BY date`).all(from, from, to, to, domain, domain);
-  if (domain) return res.json(rows);
-  // DAILY completions are date-scoped snapshots rather than entry activity.
-  // Keep them as their own domain so the heatmap can show all four colors
-  // without touching the entry domain validator.
-  const daily = db.prepare(`SELECT date,COUNT(*) AS completed FROM daily_completions WHERE (?='' OR date>=?) AND (?='' OR date<=?) GROUP BY date ORDER BY date`).all(from, from, to, to)
-    .map(row => ({date: row.date, domain: 'Daily', created: 0, completed: row.completed, updated: 0, removed: 0}));
-  res.json([...rows, ...daily].sort((a, b) => a.date.localeCompare(b.date)));
+  res.json(rows);
 });
 app.post('/api/entries', (req, res) => {
   const now = new Date().toISOString();
@@ -535,6 +536,8 @@ app.post('/api/entries', (req, res) => {
     position
   };
   if (item.prefixLabel === undefined) item.prefixLabel = '';
+  applyLoopCompletion(item, null);
+  normalizeLoopFields(item);
   save(item, res, () => recordActivity(item.domain, {created_count: 1}));
 });
 app.post('/api/entries/move', (req, res) => {
@@ -578,7 +581,8 @@ app.put('/api/entries/:id', (req, res) => {
   if (!row) return res.status(404).json({error: '条目不存在'});
   const old = JSON.parse(row.data);
   const now = new Date().toISOString();
-  const item = {...old, ...req.body, id: old.id, createdAt: old.createdAt, updatedAt: now};
+  const item = normalizeLoopFields({...old, ...req.body, id: old.id, createdAt: old.createdAt, updatedAt: now});
+  applyLoopCompletion(item, old, new Date(now));
   item.completedAt = item.type === 'todo' ? (item.status === 'done' ? (old.completedAt || now) : item.status === 'removed' ? old.completedAt : null) : null;
   item.removedAt = item.status === 'removed' ? (old.status === 'removed' ? old.removedAt : now) : null;
   const counts = {updated_count: 1};
