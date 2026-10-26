@@ -1,6 +1,6 @@
 import React,{useState,useEffect,useLayoutEffect,useRef} from 'react';
 import {createRoot} from 'react-dom/client';
-import {Plus,ArrowUpRight,Check,TextT,LinkSimple,ImageSquare,DotsSixVertical,DotsThree,X,Trash,ArrowCounterClockwise,CaretDown,CaretRight,ChartBar,Archive,PushPin,Target,MagicWand} from '@phosphor-icons/react';
+import {Plus,ArrowUpRight,Check,TextT,LinkSimple,ImageSquare,DotsSixVertical,DotsThree,X,Trash,ArrowCounterClockwise,CaretDown,CaretRight,ChartBar,Archive,PushPin,MagicWand} from '@phosphor-icons/react';
 import {domains,parseLine,toLine,treeRows,workPaneMap,pasteLink} from './lib/entries.js';
 import './style.css';
 
@@ -42,9 +42,8 @@ function buildIndexes(items){
   const byId=new Map(items.map(item=>[item.id,item])),childrenByParent=new Map();
   for(const item of items){const key=item.parentId||'';if(!childrenByParent.has(key))childrenByParent.set(key,[]);childrenByParent.get(key).push(item);}
   const descendants=id=>{const result=new Set(),queue=[id];while(queue.length){for(const child of childrenByParent.get(queue.pop())||[])if(!result.has(child.id)){result.add(child.id);queue.push(child.id);}}return result;};
-  const workRows=treeRows(items,'Work'),workPanes=workPaneMap(items,workRows),workCounts={left:0,right:0};
-  for(const {item} of workRows)if(item.type==='todo'&&!['done','removed'].includes(item.status))workCounts[workPanes.get(item.id)||'left']++;
-  return {byId,childrenByParent,descendants,workRows,workPanes,workCounts};
+  const workRows=treeRows(items,'Work'),workPanes=workPaneMap(items,workRows);
+  return {byId,childrenByParent,descendants,workRows,workPanes};
 }
 function localEndPosition(entries,item){
   const panes=item.domain==='Work'?workPaneMap(entries):null,pane=item.workPane==='right'?'right':'left';
@@ -105,8 +104,8 @@ function ArchiveModal({open,items,onClose}){
   return <div className="archive-backdrop" onPointerDown={onClose}><div className="archive-modal" role="dialog" aria-label="归档内容" onPointerDown={event=>event.stopPropagation()}>
     <div className="archive-head"><div><strong>归档</strong><span className="archive-total">{items.length} 条</span></div><button onClick={onClose} aria-label="关闭归档">×</button></div>
     {domains.map(domain=>{const rows=rowsFor(domain);return <section className="archive-section" key={domain}><h2><span className={'archive-domain-dot archive-domain-'+domain.replace(/\W/g,'').toLowerCase()}/>{domain==='Glean & Idea'?'GLEAN & IDEA':domain.toUpperCase()} <span>{rows.length}</span></h2>{rows.length?<div className="archive-list">{rows.map(({item,depth})=><article className="archive-item" key={item.id} style={{'--archive-depth':depth}}>
-      <div className="archive-item-head"><span className={'archive-status archive-status-'+item.status}><i/>{item.status==='done'?'已完成':item.status==='removed'?'已取消':'已归档'}</span><span className="archive-type">{typeName(item)}</span>{item.type==='todo'&&['day','week'].includes(item.loop)&&<span className={'loop-label loop-'+item.loop}>{item.loop==='day'?'每日':'每周'}</span>}{item.type==='todo'&&['day','week'].includes(item.loop)&&<span className="archive-count">该周期完成 · 累计 {item.loopCompletedCount||0} 次</span>}<time title={'归档时间 '+stamp(item.archivedAt)}>{stamp(archiveTime(item))}</time></div>
-      <div className="archive-title">{item.prefixLabel&&<span className="prefix-label">{item.prefixLabel}</span>}{inline(titleOf(item))}</div>
+      <div className="archive-item-head"><span className={'archive-status archive-status-'+item.status}><i/>{item.status==='done'?'已完成':item.status==='removed'?'已取消':'已归档'}</span><span className="archive-type">{typeName(item)}</span>{item.type==='todo'&&['day','week'].includes(item.loop)&&<span className="archive-count">该周期完成 · 累计 {item.loopCompletedCount||0} 次</span>}<time title={'归档时间 '+stamp(item.archivedAt)}>{stamp(archiveTime(item))}</time></div>
+      <div className="archive-title">{item.type==='todo'&&['day','week'].includes(item.loop)&&<span className={'loop-label loop-'+item.loop}>{item.loop==='day'?'每日':'每周'}</span>}{item.prefixLabel&&<span className="prefix-label">{item.prefixLabel}</span>}{inline(titleOf(item))}</div>
       {item.content&&<p className="archive-note">{inline(item.content)}</p>}
       {item.image&&<img className="archive-image" src={item.image} alt={item.title||'归档图片'}/>}
       {item.url&&<a className="archive-link" href={item.url} target="_blank" rel="noreferrer">{item.url}</a>}
@@ -138,7 +137,7 @@ function Heatmap({items,open,onClose}){
     <div className="heatmap-months" aria-hidden="true"><span className="heatmap-month-spacer"/><div className="heatmap-month-cells">{monthMarks.map((mark,index)=><span key={mark.key} className={'heatmap-month-mark'+(index===0?' first':'')+(mark.showYear?' show-year':'')+((index===monthMarks.length-1&&53-mark.start<5)?' end':'')} style={{gridColumn:(mark.start+1)+' / span '+Math.max(1,mark.end-mark.start)}} title={mark.year+'年'+mark.month+'月'}>{mark.showYear&&<small>{mark.year}</small>}{mark.month}月</span>)}</div></div>
     <div className="heatmap-grid" aria-label="最近一年活动"><div className="heatmap-weekdays"><span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span></div><div className="heatmap-cells">{cells.map((date,index)=>{const rows=byDate.get(date)||[],byDomain=new Map(rows.map(row=>[row.domain,row])),present=HEATMAP_DOMAINS.map(([value,label])=>{const row=byDomain.get(value),count=row?Number(row.created||0)+Number(row.completed||0)+Number(row.updated||0)+Number(row.removed||0):0;return {value,label,count};}).filter(entry=>entry.count>0),active=present.filter(entry=>activeDomains.has(entry.value)),description=[date,...detail(date)].join('\n');return <button key={date+'-'+index} className={'heat-cell count-'+active.length+(selected===date?' selected':'')} aria-label={description} onMouseEnter={event=>{const rect=event.currentTarget.getBoundingClientRect();setHovered({date,x:Math.min(rect.left,window.innerWidth-240),y:rect.bottom+8});}} onMouseLeave={()=>setHovered(null)} onFocus={event=>{const rect=event.currentTarget.getBoundingClientRect();setHovered({date,x:Math.min(rect.left,window.innerWidth-240),y:rect.bottom+8});}} onBlur={()=>setHovered(null)} onClick={()=>setSelected(date)}>{active.map(({value,label,count})=><i key={value} className={'heat-domain-'+value.replace(/\W/g,'').toLowerCase()+' level-'+heatLevel(count)} title={label+' '+count}/>)}</button>})}</div></div>
     {hovered&&<div className="heatmap-tooltip" style={{left:Math.max(8,hovered.x),top:Math.min(hovered.y,window.innerHeight-120)}} role="tooltip"><strong>{hovered.date}</strong>{detail(hovered.date).map((line,index)=><span key={index}>{line}</span>)}</div>}
-    <div className={'heatmap-detail'+(selected?' has-selection':'')}>{selected?<><div className="heatmap-detail-head"><strong>{selected}</strong><span>{detail(selected).join(' · ')||'无活动'}</span></div>{selectedItems.length?<div className="heatmap-items">{selectedItems.map(item=><button key={item.id} onClick={()=>{onClose();document.querySelector(`[data-entry-id="${item.id}"]`)?.scrollIntoView({behavior:'smooth',block:'center'});}}>{titleOf(item)}</button>)}</div>:<span className="heatmap-empty">当天没有可回顾的条目</span>}</>:<p className="heatmap-detail-placeholder">点击日期查看当天回顾</p>}</div>
+    <div className={'heatmap-detail'+(selected?' has-selection':'')}>{selected?<><div className="heatmap-detail-head"><strong>{selected}</strong><span>{detail(selected).join(' · ')||'无活动'}</span></div>{selectedItems.length?<div className="heatmap-items">{selectedItems.map(item=><div className="heatmap-task" key={item.id} role="button" tabIndex={0} onClick={()=>{onClose();document.querySelector(`[data-entry-id="${item.id}"]`)?.scrollIntoView({behavior:'smooth',block:'center'});}} onKeyDown={event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();onClose();document.querySelector(`[data-entry-id="${item.id}"]`)?.scrollIntoView({behavior:'smooth',block:'center'});}}} aria-label={'定位 '+titleOf(item)}><div className="entry-read"><div className="entry-body"><EntryContent item={item} items={items}/></div></div></div>)}</div>:<span className="heatmap-empty">当天没有可回顾的条目</span>}</>:<p className="heatmap-detail-placeholder">点击日期查看当天回顾</p>}</div>
     </div>
   </div>;
 }
@@ -149,7 +148,7 @@ function EntryContent({item,items=[]}) {
   const statusDate=removed?item.removedAt:done?item.completedAt:null;
   const statusCaption=statusDate?new Date(statusDate).toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'})+(removed?'取消':'完成'):'';
   return <>
-          <span className="entry-title">{divider?<span className="md-rule"/>:<>{item.prefixLabel&&<span className="prefix-label">{item.prefixLabel}</span>}{loop&&<span className={'loop-label loop-'+loop}>{loop==='day'?'每日':'每周'}</span>}{inline(titleOf(item))}</>}</span>
+          <span className="entry-title">{divider?<span className="md-rule"/>:<>{loop&&<span className={'loop-label loop-'+loop}>{loop==='day'?'每日':'每周'}</span>}{item.prefixLabel&&<span className="prefix-label">{item.prefixLabel}</span>}{inline(titleOf(item))}</>}</span>
           {item.content&&item.title&&<span className="entry-note">{item.content.split('\n').map((line,index)=><span className="note-line" key={index}>{inline(line)}</span>)}</span>}
           {item.image&&<img className="thumb" src={item.image} alt={item.title||'条目图片'}/>}
           <span className="entry-meta">
@@ -250,7 +249,6 @@ function App(){
   const [archiveOpen,setArchiveOpen]=useState(false),[archived,setArchived]=useState([]),[archiveBusy,setArchiveBusy]=useState(false);
   const [zen,setZen]=useState(null),[zenNow,setZenNow]=useState(Date.now()),[zenConfirm,setZenConfirm]=useState('');
   const [inboxText,setInboxText]=useState(()=>readStored('rafa-inbox-text','')),[inboxBatches,setInboxBatches]=useState(()=>readStored('rafa-inbox-batches',[])),[inboxBusy,setInboxBusy]=useState(false),[inboxAdopting,setInboxAdopting]=useState(''),[inboxPhase,setInboxPhase]=useState(''),[inboxOpen,setInboxOpen]=useState(false);
-  const [currentTaskId,setCurrentTaskId]=useState(()=>readStored('rafa-current-task',''));
   const autoProcessed=useRef(readStored('rafa-inbox-auto-source',''));
   const [layout,setLayout]=useState(readLayout);
   const board=useRef(null),beforePositions=useRef(null),workScrollRefs=useRef({left:null,right:null}),scrollSaveFrame=useRef(0),scrollRestored=useRef(false);
@@ -308,13 +306,11 @@ function App(){
   useEffect(()=>()=>{cancelAnimationFrame(scrollSaveFrame.current);},[]);
   useEffect(()=>{try{localStorage.setItem('rafa-inbox-text',JSON.stringify(inboxText));}catch{}},[inboxText]);
   useEffect(()=>{try{localStorage.setItem('rafa-inbox-batches',JSON.stringify(inboxBatches));}catch{}},[inboxBatches]);
-  useEffect(()=>{try{localStorage.setItem('rafa-current-task',JSON.stringify(currentTaskId));}catch{}},[currentTaskId]);
   useEffect(()=>{if(!inboxText.trim()||inboxBusy)return;const source=inboxText.trim();if(source===autoProcessed.current)return;const timer=setTimeout(()=>runInboxAI(source),60000);return()=>clearTimeout(timer);},[inboxText,inboxBusy]);
-  useEffect(()=>{const item=items.find(entry=>entry.id===currentTaskId);if(item&&['done','removed'].includes(item.status))setCurrentTaskId('');},[items,currentTaskId]);
   const itemsRef=useRef(items);itemsRef.current=items;
   useEffect(()=>{if(!zen)return;const timer=setInterval(()=>setZenNow(Date.now()),1000);return()=>clearInterval(timer);},[zen]);
   useEffect(()=>{if(!zen)return;const onKeyDown=event=>{if(event.key==='Escape'){event.preventDefault();setZenConfirm('hold');}};document.addEventListener('keydown',onKeyDown);return()=>document.removeEventListener('keydown',onKeyDown);},[zen]);
-  function startZen(item){setMenu(null);if(item.type==='todo')setCurrentTaskId(item.id);setZen({id:item.id,startedAt:Date.now()});setZenNow(Date.now());setZenConfirm('');}
+  function startZen(item){setMenu(null);setZen({id:item.id,startedAt:Date.now()});setZenNow(Date.now());setZenConfirm('');}
   function zenDuration(milliseconds){const seconds=Math.max(0,Math.floor(milliseconds/1000)),hours=Math.floor(seconds/3600),minutes=Math.floor(seconds%3600/60),rest=seconds%60;return (hours?hours+'时':'')+(minutes?minutes+'分':'')+rest+'秒';}
   function zenClock(milliseconds){const seconds=Math.max(0,Math.floor(milliseconds/1000)),hours=Math.floor(seconds/3600),minutes=Math.floor(seconds%3600/60),rest=seconds%60;return hours?[hours,minutes,rest].map(value=>String(value).padStart(2,'0')).join(':'):[minutes,rest].map(value=>String(value).padStart(2,'0')).join(':');}
   function zenTree(item){const byParent=new Map();for(const entry of itemsRef.current){if(!byParent.has(entry.parentId||''))byParent.set(entry.parentId||'',[]);byParent.get(entry.parentId||'').push(entry);}const result=[];function visit(entry,depth){result.push({item:entry,depth});for(const child of byParent.get(entry.id)||[])visit(child,depth+1);}visit(item,0);return result;}
@@ -339,7 +335,6 @@ function App(){
         updates.set(root.id,{...root,content:[root.content,record].filter(Boolean).join('\n')});
       }
       for(const [id,value] of updates)replaceItem(await api('/api/entries/'+id,'PUT',value));
-      if(action==='done'&&currentTaskId===root.id)setCurrentTaskId('');
       setZen(null);setZenConfirm('');
     }catch(error){setError(error.message);}finally{markPending('zen',false);}
   }
@@ -352,10 +347,9 @@ function App(){
     return ()=>document.removeEventListener('pointerdown',commit);
   },[draft?.editorKey,draft?.editorSeed,draft?.id,draft?.domain,draft?.workPane]);
   useEffect(()=>{const closeTransient=event=>{if(!event.target.closest('.context-menu,.row-actions'))setMenu(null);if(!event.target.closest('.row-actions,.context-menu'))setConfirmDelete('');if(!event.target.closest('.column-archive'))setConfirmArchive('');};document.addEventListener('pointerdown',closeTransient);return()=>document.removeEventListener('pointerdown',closeTransient);},[]);
-  async function archiveDomain(domain){if(archiveBusy)return;if(confirmArchive!==domain){setConfirmArchive(domain);return;}setConfirmArchive('');setArchiveBusy(true);setError('');try{const result=await api('/api/archive','POST',{domain});itemsRef.current=result.items;setItems(result.items);if(!result.items.some(item=>item.id===currentTaskId))setCurrentTaskId('');setArchived(await api('/api/archive'));setError(result.count?`已归档 ${result.count} 条`:'没有可归档的内容');}catch(e){setError(e.message);}finally{setArchiveBusy(false);}}
+  async function archiveDomain(domain){if(archiveBusy)return;if(confirmArchive!==domain){setConfirmArchive(domain);return;}setConfirmArchive('');setArchiveBusy(true);setError('');try{const result=await api('/api/archive','POST',{domain});itemsRef.current=result.items;setItems(result.items);setArchived(await api('/api/archive'));setError(result.count?`已归档 ${result.count} 条`:'没有可归档的内容');}catch(e){setError(e.message);}finally{setArchiveBusy(false);}}
   async function openArchive(){setArchiveOpen(true);try{setArchived(await api('/api/archive'));}catch(e){setError(e.message);}}
   function replaceItem(saved,options){applyItems(itemsRef.current.some(item=>item.id===saved.id)?itemsRef.current.map(item=>item.id===saved.id?saved:item):[...itemsRef.current,saved],options);}
-  function setCurrentTask(item){setCurrentTaskId(currentTaskId===item.id?'':item.id);}
   function updateInboxDraft(batchId,draftId,patch){setInboxBatches(previous=>previous.map(batch=>batch.id!==batchId?batch:{...batch,drafts:batch.drafts.map(draft=>draft.id===draftId?{...draft,...patch}:draft)}));}
   async function runInboxAI(source=inboxText.trim()){
     if(!source||inboxBusy)return;
@@ -435,7 +429,6 @@ function App(){
     const commit=()=>updateStatus(current,status);
     markPending(current.id,true);setError('');
     applyItems(itemsRef.current.map(entry=>entry.id===current.id?optimistic:entry),{animate:false});
-    if(current.id===currentTaskId&&['done','removed'].includes(status))setCurrentTaskId('');
     feedback(current.id);
     try{replaceItem(await api('/api/entries/'+current.id,'PUT',{...current,status}),{animate:false});}
     catch(e){applyItems(itemsRef.current.map(entry=>entry.id===current.id?current:entry),{animate:false});setError(e.message,commit);}
@@ -475,7 +468,7 @@ function App(){
       const next=await api('/api/entries/'+item.id,'DELETE');
       const node=[...board.current?.querySelectorAll('[data-entry-id]')||[]].find(node=>node.dataset.entryId===item.id);
       if(node&&!prefersReducedMotion())await node.animate([{opacity:1,transform:'translateX(0)'},{opacity:0,transform:'translateX(8px)'}],{duration:140,easing:'ease-in',fill:'forwards'}).finished.catch(()=>{});
-      applyItems(next);if(!next.some(entry=>entry.id===currentTaskId))setCurrentTaskId('');
+      applyItems(next);
     }catch(e){setError(e.message);}finally{markPending(item.id,false);}
   }
   function resize(event,kind){
@@ -596,7 +589,7 @@ function App(){
     const tasks=items.filter(entry=>entry.id!==item.id&&descendants.has(entry.id)&&entry.type==='todo'&&entry.status!=='removed');
     const target=drop?.targetId===item.id?drop.placement:'';
     const timeTitle=[['createdAt','创建'],['updatedAt','更新'],['completedAt','完成'],['removedAt','移除']].filter(([key])=>item[key]).map(([key,name])=>name+'：'+new Date(item[key]).toLocaleString('zh-CN',{hour12:false})).join('\n');
-    return <div key={item.id} className={'entry '+(done?'is-done ':'')+(removed?'is-removed ':'')+(group?'is-group ':'')+(divider?'is-divider ':'')+(item.url?'has-link ':'')+(item.pinnedAt?'is-pinned ':'')+(currentTaskId===item.id?'is-current-task ':'')+(dragging===item.id?'drag-source ':'')+(target?'drop-'+target:'')} data-entry-id={item.id} data-depth={depth} style={{'--depth':depth}} onPointerDown={event=>{if(event.target.closest('button,a,textarea,input,.row-actions,.group-controls,.group-picker'))return;beginDrag(event,item);}} onClick={event=>{if(event.target.closest('button,a,textarea,.entry-body,.row-actions,.group-controls,.group-picker')||editing)return;open(item);}} onContextMenu={event=>{if(event.target.closest('textarea'))return;event.preventDefault();setMenu({x:event.clientX, y:event.clientY,item});}}>
+    return <div key={item.id} className={'entry '+(done?'is-done ':'')+(removed?'is-removed ':'')+(group?'is-group ':'')+(divider?'is-divider ':'')+(item.url?'has-link ':'')+(item.pinnedAt?'is-pinned ':'')+(dragging===item.id?'drag-source ':'')+(target?'drop-'+target:'')} data-entry-id={item.id} data-depth={depth} style={{'--depth':depth}} onPointerDown={event=>{if(event.target.closest('button,a,textarea,input,.row-actions,.group-controls,.group-picker'))return;beginDrag(event,item);}} onClick={event=>{if(event.target.closest('button,a,textarea,.entry-body,.row-actions,.group-controls,.group-picker')||editing)return;open(item);}} onContextMenu={event=>{if(event.target.closest('textarea'))return;event.preventDefault();setMenu({x:event.clientX, y:event.clientY,item});}}>
       <button className="drag-handle" title="拖动排序；放在文字中间成为子条目" aria-label={'拖动 '+titleOf(item)} onPointerDown={event=>{event.stopPropagation();beginDrag(event,item);}}><DotsSixVertical size={14}/></button>
       {editing?editor():<div className="entry-read">
         {group?<><button className={'group-toggle '+(item.collapsed?'collapsed':'')} aria-label={item.collapsed?'展开分组':'收起分组'} aria-expanded={!item.collapsed} onClick={()=>configureGroup(item,{collapsed:!item.collapsed})}><CaretDown size={15}/></button><button className="group-signature" title="选择分组图标和底色" onClick={()=>setPicker(picker===item.id?'':item.id)}>{item.signature||'🌿'}</button>{picker===item.id&&<div className="group-picker"><div>{['🌿','📌','📝','🚀','💡','🏠','💼'].map(signature=><button key={signature} aria-label={'图标 '+signature} onClick={()=>{configureGroup(item,{signature});setPicker('');}}>{signature}</button>)}</div><div>{['sage','sand','blue','rose','none'].map(tone=><button className={'tone-swatch tone-'+tone} key={tone} aria-label={'底色 '+tone} onClick={()=>{configureGroup(item,{tone});setPicker('');}}/>)}</div></div>}</>:divider?<span className="kind-mark">—</span>:item.type==='todo'?<button className={'checkbox '+(done?'checked':'')} aria-label={done?'重新打开任务':'完成任务'} onClick={()=>updateStatus(item)} disabled={pending.has(item.id)}>{done&&<Check size={11} weight="bold"/>}{removed&&<span>−</span>}</button>:<span className="kind-mark">{item.type==='text'?<TextT size={15}/>:item.type==='link'?<LinkSimple size={15}/>:item.type==='bullet'?<span>•</span>:<ImageSquare size={15}/>}</span>}
@@ -640,10 +633,9 @@ function App(){
       try{localStorage.setItem('rafa-work-scroll',JSON.stringify(value));}catch{}
     });
   }
-  function workPane(pane,label){
+  function workPane(pane){
     const endDrop=drop?.domain==='Work'&&drop.placement==='end'&&(drop.workPane||'left')===pane;
     return <div className={'work-col '+(endDrop?'is-end-drop':'')} data-work-pane={pane} onDragOver={event=>{if(event.dataTransfer.types.includes('Files'))event.preventDefault();}} onDrop={event=>{const file=Array.from(event.dataTransfer.files).find(file=>file.type.startsWith('image/'));if(file){event.preventDefault();upload(file,{domain:'Work',type:'image',parentId:'',workPane:pane});}}}>
-      <div className="work-col-head"><span>{label}</span><span className="work-col-count">{indexes.workCounts[pane]}</span></div>
       <div className="work-col-scroll" ref={node=>{workScrollRefs.current[pane]=node;}} onScroll={saveWorkScroll}>
         <div className="column-content">{loading?<div className="loading">加载中…</div>:renderTree('Work',pane)}</div>
         {workAddRow(pane)}
@@ -651,7 +643,6 @@ function App(){
       </div>
     </div>;
   }
-  const currentTask=items.find(item=>item.id===currentTaskId);
   if(authenticated===null||loading)return <div className="auth-screen"><div className="auth-brand"><img className="auth-cat" src="/rafa-cat.png" alt=""/><div className="auth-mark">Rafa<span>todo</span><i/></div></div><span className="auth-loading">正在打开…</span><ErrorNotice message={error} retry={retryAction} onClose={()=>setError('')}/></div>;
   if(!authenticated)return <div className="auth-screen"><form className="auth-form" onSubmit={login}><div className="auth-brand"><img className="auth-cat" src="/rafa-cat.png" alt=""/><div className="auth-mark">Rafa<span>todo</span><i/></div></div><div className="auth-input"><input id="password" type="password" autoFocus autoComplete="current-password" value={password} onChange={event=>setPassword(event.target.value)} aria-label="密码" placeholder="••••••" onKeyDown={event=>{if(event.key==='Enter')login(event);}}/></div></form><ErrorNotice message={error} retry={retryAction} onClose={()=>setError('')}/></div>;
   return <div className="app">
@@ -663,8 +654,7 @@ function App(){
       <div className="column-watermark" aria-hidden="true">{domain==='Glean & Idea'?<>GLEAN<span>& IDEA</span></>:domain.toUpperCase()}</div>
       <div className="column-head"><h1>{domain.toUpperCase()}</h1><span>{items.filter(item=>item.domain===domain&&item.type==='todo'&&!['done','removed'].includes(item.status)).length}</span><button className={'column-archive '+(confirmArchive===domain?'confirm-archive':'')} onClick={()=>archiveDomain(domain)} disabled={archiveBusy} aria-label={confirmArchive===domain?'确认归档':'归档 '+domain+' 已完成和已移除的内容'} title={confirmArchive===domain?'再次点击确认归档':'归档本栏'}>{confirmArchive===domain?'确认归档':<Archive size={16}/>}</button></div>
       {items.some(item=>item.domain===domain&&item.pinnedAt)&&<div className="pinned-list" aria-label={domain+' 置顶条目'}>{items.filter(item=>item.domain===domain&&item.pinnedAt).sort((a,b)=>a.pinnedAt.localeCompare(b.pinnedAt)).map(item=><div className="pinned-item" key={item.id} onContextMenu={event=>{event.preventDefault();setMenu({x:event.clientX,y:event.clientY,item});}}><PushPin size={13} weight="fill"/><button className="pinned-title" onClick={()=>locatePinned(item)} title={titleOf(item)}><span className="pinned-title-text">{inline(titleOf(item),false)}</span>{item.content&&<span className="pinned-note">{item.content.split('\n').map((line,index)=><span key={index}>{inline(line,false)}</span>)}</span>}<span className="pinned-meta">{item.priority==='urgent'?'!! 紧急':item.priority==='high'?'! 重要':''}{item.owner?' @'+item.owner:''}{item.tags?' '+item.tags.split(/[,，]\s*/).map(tag=>'#'+tag).join(' '):''}{item.dueDate?' 截止 '+item.dueDate:''}</span></button><button className="pinned-unpin" onClick={()=>togglePin(item)} aria-label={'取消置顶 '+titleOf(item)} title="取消置顶"><PushPin size={13} weight="fill"/></button></div>)}</div>}
-      {domain==='Work'&&<div className="current-task-slot">{currentTask?<div className="current-task-bar"><Target size={13} weight="fill"/><span>当前</span><button className="current-task-title" onClick={()=>locatePinned(currentTask)}>{titleOf(currentTask)}</button><button className="current-task-clear" onClick={()=>setCurrentTaskId('')} aria-label="清除当前任务" title="清除当前任务">×</button></div>:<div className="current-task-bar is-empty"><Target size={13}/><span>当前</span><span className="current-task-placeholder">悬停任务并点靶心，设为当前</span></div>}</div>}
-      {domain==='Work'?<div className="column-scroll work-scroll"><div className="work-cols" style={{'--work-split':layout.workSplit+'%'}}>{workPane('left','左栏')}{workDivider()}{workPane('right','右栏')}</div></div>:<div className="column-scroll">
+      {domain==='Work'?<div className="column-scroll work-scroll"><div className="work-cols" style={{'--work-split':layout.workSplit+'%'}}>{workPane('left')}{workDivider()}{workPane('right')}</div></div>:<div className="column-scroll">
       <div className="column-content">{loading?<div className="loading">加载中…</div>:renderTree(domain)}</div>
       <div className="add-row">{draft&&!draft.id&&!draft.insert&&!draft.parentId&&draft.domain===domain?editor():<button onClick={()=>open(null,domain)} aria-label={'在 '+domain+' 新增条目'}><Plus size={14}/><span>写一条…</span></button>}</div>
       </div>}
@@ -688,7 +678,6 @@ function App(){
     {menu&&<div className={'context-menu '+(menu.kind==='row'?'row-menu':'')} role="menu" style={{left:Math.max(8,Math.min(menu.x,window.innerWidth-190)),top:Math.min(menu.y,window.innerHeight-(menu.kind==='row'?270:220))}} onPointerDown={event=>event.stopPropagation()} onKeyDown={event=>{if(event.key==='Escape'){event.preventDefault();setMenu(null);}}}>
       {menu.kind==='row'?<>
         {menu.item.type!=='divider'&&<button role="menuitem" disabled={pending.has(menu.item.id)} onClick={()=>startZen(menu.item)}>ZEN 专注</button>}
-        {menu.item.type==='todo'&&<button role="menuitem" disabled={pending.has(menu.item.id)} onClick={()=>{setCurrentTask(menu.item);setMenu(null);}}>{currentTaskId===menu.item.id?'取消当前任务':'设为当前任务'}</button>}
         <button role="menuitem" disabled={pending.has(menu.item.id)} onClick={()=>togglePin(menu.item)}>{menu.item.pinnedAt?'取消置顶':'置顶'}</button>
         <button role="menuitem" disabled={pending.has(menu.item.id)} onClick={()=>{updateStatus(menu.item,menu.item.status==='removed'?'open':'removed');setMenu(null);}}>{menu.item.status==='removed'?'恢复条目':'取消条目'}</button>
         <span className="context-separator"/>
