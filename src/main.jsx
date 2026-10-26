@@ -30,6 +30,7 @@ function previewType(value){
 }
 const prefersReducedMotion=()=>window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 const clamp=value=>Math.min(75,Math.max(25,value));
+const sideLayout=width=>width>=900?'three':width>=660?'two':'stacked';
 const sideHeight=(value,fallback)=>Math.min(70,Math.max(10,Number(value)||fallback));
 function layoutFromSide(daily,life){
   const d=sideHeight(daily,22),total=Math.min(90,d+sideHeight(life,38));
@@ -251,7 +252,16 @@ function App(){
   const [inboxText,setInboxText]=useState(()=>readStored('rafa-inbox-text','')),[inboxBatches,setInboxBatches]=useState(()=>readStored('rafa-inbox-batches',[])),[inboxBusy,setInboxBusy]=useState(false),[inboxAdopting,setInboxAdopting]=useState(''),[inboxPhase,setInboxPhase]=useState(''),[inboxOpen,setInboxOpen]=useState(false);
   const autoProcessed=useRef(readStored('rafa-inbox-auto-source',''));
   const [layout,setLayout]=useState(readLayout);
+  const [boardWidth,setBoardWidth]=useState(0);
   const board=useRef(null),beforePositions=useRef(null),workScrollRefs=useRef({left:null,right:null}),scrollSaveFrame=useRef(0),scrollRestored=useRef(false);
+  useLayoutEffect(()=>{
+    const node=board.current;if(!node)return;
+    const measure=()=>setBoardWidth(node.clientWidth);
+    measure();
+    const observer=new ResizeObserver(measure);observer.observe(node);
+    window.addEventListener('resize',measure);
+    return ()=>{observer.disconnect();window.removeEventListener('resize',measure);};
+  },[authenticated,loading]);
   useLayoutEffect(()=>{
     const previous=beforePositions.current;beforePositions.current=null;
     if(!previous||prefersReducedMotion())return;
@@ -262,6 +272,7 @@ function App(){
     }
   },[items]);
   const byId=indexes.byId,descendantsOf=indexes.descendants;
+  const sideWidth=boardWidth*(1-layout.work/100),rightLayout=sideLayout(sideWidth);
   function applyItems(next,{animate=true}={}){
     beforePositions.current=animate&&!prefersReducedMotion()?new Map([...board.current?.querySelectorAll('[data-entry-id]')||[]].map(node=>[node.dataset.entryId,node.getBoundingClientRect()])):null;
     itemsRef.current=next;
@@ -643,12 +654,8 @@ function App(){
       </div>
     </div>;
   }
-  if(authenticated===null||loading)return <div className="auth-screen"><div className="auth-brand"><img className="auth-cat" src="/rafa-cat.png" alt=""/><div className="auth-mark">Rafa<span>todo</span><i/></div></div><span className="auth-loading">正在打开…</span><ErrorNotice message={error} retry={retryAction} onClose={()=>setError('')}/></div>;
-  if(!authenticated)return <div className="auth-screen"><form className="auth-form" onSubmit={login}><div className="auth-brand"><img className="auth-cat" src="/rafa-cat.png" alt=""/><div className="auth-mark">Rafa<span>todo</span><i/></div></div><div className="auth-input"><input id="password" type="password" autoFocus autoComplete="current-password" value={password} onChange={event=>setPassword(event.target.value)} aria-label="密码" placeholder="••••••" onKeyDown={event=>{if(event.key==='Enter')login(event);}}/></div></form><ErrorNotice message={error} retry={retryAction} onClose={()=>setError('')}/></div>;
-  return <div className="app">
-    <header className="topbar"><a className="brand" href="/" aria-label="RafaTodo 首页"><img className="brand-cat" src="/rafa-cat.png" alt=""/>Rafa<span>todo</span><i/></a><div className="top-tools"><button className="archive-view" onClick={openArchive} aria-label="查看归档" title="查看归档"><Archive size={18}/></button><button className={'heatmap-trigger '+(heatmapOpen?'active':'')} onClick={()=>setHeatmapOpen(value=>!value)} aria-label="打开活动热力图" title="活动热力图"><ChartBar size={18}/></button></div><Heatmap items={items} open={heatmapOpen} onClose={()=>setHeatmapOpen(false)}/><ArchiveModal open={archiveOpen} items={archived} onClose={()=>setArchiveOpen(false)}/></header>
-    <ErrorNotice message={error} retry={retryAction} onClose={()=>setError('')}/>
-    <main ref={board} className="board" style={{'--work':layout.work+'%','--daily':layout.daily+'%','--life':layout.life+'%','--glean':Math.max(10,100-layout.total)+'%'}}>{domains.map(domain=><section className={'column '+(drop?.domain===domain&&drop.placement==='end'?'drop-column':'')} key={domain} data-domain={domain} aria-label={domain}
+  function columnSection(domain){
+    return <section className={'column '+(drop?.domain===domain&&drop.placement==='end'?'drop-column':'')} key={domain} data-domain={domain} aria-label={domain}
       onDragOver={event=>{if(event.dataTransfer.types.includes('Files'))event.preventDefault();}}
       onDrop={event=>{const file=Array.from(event.dataTransfer.files).find(file=>file.type.startsWith('image/'));if(file){event.preventDefault();upload(file,domain);}}}>
       <div className="column-watermark" aria-hidden="true">{domain==='Glean & Idea'?<>GLEAN<span>& IDEA</span></>:domain.toUpperCase()}</div>
@@ -661,7 +668,14 @@ function App(){
       {domain==='Work'&&<div className="inbox-wrap"><div className="inbox"><div className="inbox-entry"><textarea id="work-inbox" value={inboxText} onChange={event=>setInboxText(event.target.value)} placeholder="随手记下新信息，不必整理…" aria-label="INBOX 原文"/><button className="inbox-run" onClick={()=>runInboxAI()} disabled={!inboxText.trim()||inboxBusy} title="整理为任务草稿" aria-label="AI 整理"><MagicWand size={17}/></button></div><div className="inbox-status" aria-live="polite">{inboxBusy?inboxPhase:inboxPhase||'停止输入 60 秒后自动整理'}{inboxBatches.length>0&&<button className="inbox-review" onClick={()=>setInboxOpen(value=>!value)}>{inboxOpen?'草稿预览中':`查看 AI 草稿 (${inboxBatches.reduce((sum,batch)=>sum+batch.drafts.filter(draft=>draft.decision==='pending').length,0)} 待处理)`}</button>}</div></div>
 
       </div>}
-    </section>)}{divider('work')}{divider('daily')}{divider('life')}</main>
+    </section>;
+  }
+  if(authenticated===null||loading)return <div className="auth-screen"><div className="auth-brand"><img className="auth-cat" src="/rafa-cat.png" alt=""/><div className="auth-mark">Rafa<span>todo</span><i/></div></div><span className="auth-loading">正在打开…</span><ErrorNotice message={error} retry={retryAction} onClose={()=>setError('')}/></div>;
+  if(!authenticated)return <div className="auth-screen"><form className="auth-form" onSubmit={login}><div className="auth-brand"><img className="auth-cat" src="/rafa-cat.png" alt=""/><div className="auth-mark">Rafa<span>todo</span><i/></div></div><div className="auth-input"><input id="password" type="password" autoFocus autoComplete="current-password" value={password} onChange={event=>setPassword(event.target.value)} aria-label="密码" placeholder="••••••" onKeyDown={event=>{if(event.key==='Enter')login(event);}}/></div></form><ErrorNotice message={error} retry={retryAction} onClose={()=>setError('')}/></div>;
+  return <div className="app">
+    <header className="topbar"><a className="brand" href="/" aria-label="RafaTodo 首页"><img className="brand-cat" src="/rafa-cat.png" alt=""/>Rafa<span>todo</span><i/></a><div className="top-tools"><button className="archive-view" onClick={openArchive} aria-label="查看归档" title="查看归档"><Archive size={18}/></button><button className={'heatmap-trigger '+(heatmapOpen?'active':'')} onClick={()=>setHeatmapOpen(value=>!value)} aria-label="打开活动热力图" title="活动热力图"><ChartBar size={18}/></button></div><Heatmap items={items} open={heatmapOpen} onClose={()=>setHeatmapOpen(false)}/><ArchiveModal open={archiveOpen} items={archived} onClose={()=>setArchiveOpen(false)}/></header>
+    <ErrorNotice message={error} retry={retryAction} onClose={()=>setError('')}/>
+    <main ref={board} className="board" data-side-layout={rightLayout} style={{'--work':layout.work+'%','--daily':layout.daily+'%','--life':layout.life+'%','--glean':Math.max(10,100-layout.total)+'%'}}><div className="side-board">{domains.filter(domain=>domain!=='Work').map(columnSection)}</div>{columnSection('Work')}{divider('work')}{divider('daily')}{divider('life')}</main>
     {inboxOpen&&<InboxDialog onClose={()=>setInboxOpen(false)}>
       <div className="inbox-drafts-head"><strong>AI 草稿 <span>{inboxBatches.reduce((sum,batch)=>sum+batch.drafts.filter(draft=>draft.decision==='pending').length,0)} 待处理</span></strong><button autoFocus onClick={()=>setInboxOpen(false)} aria-label="关闭 AI 草稿"><X size={18}/></button></div>
       <div className="inbox-drafts-list">{inboxBatches.length?inboxBatches.map(batch=><section className="inbox-batch" key={batch.id}>
