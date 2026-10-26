@@ -41,6 +41,14 @@ db.exec(`
     removed_count INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (date, domain)
   );
+  CREATE TABLE IF NOT EXISTS loop_completions (
+    entry_id TEXT NOT NULL,
+    loop_kind TEXT NOT NULL,
+    period_key TEXT NOT NULL,
+    completed_at TEXT NOT NULL,
+    PRIMARY KEY (entry_id, loop_kind, period_key)
+  );
+  CREATE INDEX IF NOT EXISTS loop_completions_entry_idx ON loop_completions(entry_id);
   CREATE INDEX IF NOT EXISTS entries_archived_at_idx ON entries(json_extract(data, '$.archivedAt'));
   CREATE INDEX IF NOT EXISTS entries_domain_idx ON entries(json_extract(data, '$.domain'));
   CREATE INDEX IF NOT EXISTS entries_pinned_at_idx ON entries(json_extract(data, '$.pinnedAt'));
@@ -82,18 +90,20 @@ function transaction(run) {
 }
 
 function readEntries() {
-  return db.prepare('SELECT data FROM entries').all().map(row => JSON.parse(row.data));
+  return hydrateLoopEntries(db.prepare('SELECT data FROM entries').all().map(row => JSON.parse(row.data)));
 }
 
 function unarchivedEntries() {
-  return db.prepare("SELECT data FROM entries WHERE json_extract(data, '$.archivedAt') IS NULL").all()
-    .map(row => JSON.parse(row.data))
+  return hydrateLoopEntries(db.prepare("SELECT data FROM entries WHERE json_extract(data, '$.archivedAt') IS NULL").all()
+    .map(row => JSON.parse(row.data)))
+    .filter(item => !item.archivedAt)
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 }
 
 function archivedEntries() {
-  return db.prepare("SELECT data FROM entries WHERE json_extract(data, '$.archivedAt') > ''").all()
-    .map(row => normalizeLoopFields(JSON.parse(row.data)))
+  return hydrateLoopEntries(db.prepare("SELECT data FROM entries WHERE json_extract(data, '$.archivedAt') > ''").all()
+    .map(row => JSON.parse(row.data)))
+    .filter(item => item.archivedAt)
     .sort((a, b) => new Date(b.archivedAt) - new Date(a.archivedAt));
 }
 
@@ -156,6 +166,75 @@ function loopKey(item, now = new Date()) {
   return loopPeriodKey(item.loop, now, LOOP_TIME_ZONE);
 }
 
+// Completion history is keyed by the immutable entry UUID, never by a title.
+// A title edit, reorder or move therefore cannot disturb the counter.
+function loopRecordFor(item, period = loopKey(item), records) {
+  if (item.type !== 'todo' || !['day', 'week'].includes(item.loop)) return null;
+  if (records) return records.periods.get(period) || null;
+  return db.prepare('SELECT completed_at AS completedAt FROM loop_completions WHERE entry_id=? AND loop_kind=? AND period_key=?')
+    .get(item.id, item.loop, period) || null;
+}
+
+function loopCompletedCount(item) {
+  if (item.type !== 'todo' || !['day', 'week'].includes(item.loop)) return 0;
+  return Number(db.prepare('SELECT COUNT(*) AS count FROM loop_completions WHERE entry_id=?').get(item.id)?.count) || 0;
+}
+
+function hydrateLoopEntry(item, now = new Date(), records) {
+  if (item.type !== 'todo' || !['day', 'week'].includes(item.loop)) {
+    item.loop = '';
+    item.loopPeriod = '';
+    delete item.loopCompletedCount;
+    delete item.loopCompletionKey;
+    return item;
+  }
+  item.loopPeriod = loopKey(item, now);
+  item.loopCompletedCount = records ? records.total : loopCompletedCount(item);
+  const record = loopRecordFor(item, item.loopPeriod, records);
+  if (record && item.status !== 'removed') {
+    item.status = 'done';
+    item.completedAt = record.completedAt;
+  } else if (!record && item.status === 'done' && !item.archivedAt) {
+    // A completed loop task without a completion for this period is a task
+    // that has crossed into a new period. It must start open again.
+    item.status = 'open';
+    item.completedAt = null;
+  }
+  delete item.loopCompletionKey;
+  return item;
+}
+
+function hydrateLoopEntries(items, now = new Date()) {
+  const ids = [...new Set(items.filter(item => item.type === 'todo' && ['day', 'week'].includes(item.loop)).map(item => item.id))];
+  const byId = new Map(items.map(item => [item.id, item]));
+  const records = new Map();
+  for (let offset = 0; offset < ids.length; offset += 400) {
+    const chunk = ids.slice(offset, offset + 400);
+    const placeholders = chunk.map(() => '?').join(',');
+    const rows = db.prepare(`SELECT entry_id AS entryId,period_key AS periodKey,completed_at AS completedAt FROM loop_completions WHERE entry_id IN (${placeholders})`).all(...chunk);
+    for (const row of rows) {
+      if (!records.has(row.entryId)) records.set(row.entryId, {total: 0, periods: new Map()});
+      const record = records.get(row.entryId);
+      record.total++;
+      record.periods.set(row.periodKey, row);
+    }
+  }
+  for (const item of items) hydrateLoopEntry(item, now, records.get(item.id) || {total: 0, periods: new Map()});
+  return items;
+}
+
+function setLoopCompletion(item, completed, now = new Date()) {
+  if (item.type !== 'todo' || !['day', 'week'].includes(item.loop)) return;
+  const period = loopKey(item, now);
+  if (completed) {
+    db.prepare('INSERT OR IGNORE INTO loop_completions (entry_id,loop_kind,period_key,completed_at) VALUES (?,?,?,?)')
+      .run(item.id, item.loop, period, now.toISOString());
+  } else {
+    db.prepare('DELETE FROM loop_completions WHERE entry_id=? AND loop_kind=? AND period_key=?')
+      .run(item.id, item.loop, period);
+  }
+}
+
 function startupMigration() {
   const rows = db.prepare('SELECT id, data FROM entries').all();
   const original = new Map();
@@ -163,7 +242,7 @@ function startupMigration() {
     const item = JSON.parse(row.data);
     original.set(item.id, row.data);
     if (item.domain === 'Glean' || item.domain === 'Idea') item.domain = 'Glean & Idea';
-    return normalizeLoopFields(item);
+    return item;
   });
   let normalized = migrated;
   try {
@@ -182,6 +261,49 @@ function startupMigration() {
 
 startupMigration();
 
+// Earlier builds stored loop counters inside the entry JSON. Import those
+// records once into the ID-scoped ledger, then remove the duplicated fields.
+function migrateLoopLedger() {
+  if (db.prepare("SELECT 1 FROM settings WHERE key='loop-ledger-v1'").get()) return;
+  const rows = db.prepare("SELECT id,data FROM entries WHERE json_extract(data, '$.type')='todo' AND json_extract(data, '$.loop') IN ('day','week')").all();
+  let imported = 0;
+  transaction(() => {
+    for (const row of rows) {
+      const item = JSON.parse(row.data);
+      const loop = item.loop;
+      const count = Math.max(0, Number(item.loopCompletedCount) || 0);
+      const period = typeof item.loopPeriod === 'string' ? item.loopPeriod : '';
+      const completionKey = typeof item.loopCompletionKey === 'string' ? item.loopCompletionKey : '';
+      const completed = item.status === 'done';
+      const currentPeriod = loopPeriodKey(loop, new Date(), LOOP_TIME_ZONE);
+      if (completed && period && completionKey === period) {
+        db.prepare('INSERT OR IGNORE INTO loop_completions (entry_id,loop_kind,period_key,completed_at) VALUES (?,?,?,?)')
+          .run(item.id, loop, period, item.completedAt || item.updatedAt || item.createdAt || new Date().toISOString());
+        imported++;
+      } else if (completed && !period) {
+        db.prepare('INSERT OR IGNORE INTO loop_completions (entry_id,loop_kind,period_key,completed_at) VALUES (?,?,?,?)')
+          .run(item.id, loop, currentPeriod, item.completedAt || item.updatedAt || item.createdAt || new Date().toISOString());
+        imported++;
+      }
+      const known = Number(db.prepare('SELECT COUNT(*) AS count FROM loop_completions WHERE entry_id=? AND loop_kind=?').get(item.id, loop)?.count) || 0;
+      // If the old JSON had a positive total but no usable period, keep the
+      // total as historical records so a user's counter does not drop to zero.
+      for (let index = known; index < count; index++) {
+        db.prepare('INSERT OR IGNORE INTO loop_completions (entry_id,loop_kind,period_key,completed_at) VALUES (?,?,?,?)')
+          .run(item.id, loop, 'legacy-' + index, item.updatedAt || item.createdAt || new Date().toISOString());
+      }
+      delete item.loopCompletedCount;
+      delete item.loopCompletionKey;
+      delete item.loopPeriod;
+      db.prepare('UPDATE entries SET data=? WHERE id=?').run(JSON.stringify(item), item.id);
+    }
+    db.prepare("INSERT INTO settings (key,value) VALUES ('loop-ledger-v1','1') ON CONFLICT(key) DO UPDATE SET value='1'").run();
+  });
+  if (rows.length) console.log(`[startup] 已迁移 ${rows.length} 条循环任务到 ID 台账（${imported} 次完成记录）`);
+}
+
+migrateLoopLedger();
+
 // Preserve old DAILY checklists as ordinary Daily tasks once, then leave their
 // lifecycle to the same status and LOOP rules as every other column.
 function migrateLegacyDaily() {
@@ -194,13 +316,13 @@ function migrateLegacyDaily() {
     for (const [index, row] of rows.entries()) {
       const id = 'daily-' + row.id;
       const complete = Number(row.completedCount) > 0;
-      const item = normalizeLoopFields({
+      const item = {
         id, domain: 'Daily', type: 'todo', status: complete ? 'done' : 'open',
-        title: row.text, content: '', prefixLabel: '', loop: '', loopCompletedCount: 0,
+        title: row.text, content: '', prefixLabel: '', loop: '',
         position: index, createdAt: row.createdAt, updatedAt: row.lastCompletedAt || row.createdAt,
         completedAt: complete ? row.lastCompletedAt || row.createdAt : null, removedAt: null,
         sourceId: row.id
-      });
+      };
       db.prepare('INSERT OR IGNORE INTO entries VALUES (?,?)').run(id, JSON.stringify(item));
     }
     db.prepare("INSERT INTO settings (key,value) VALUES ('daily-migrated','1') ON CONFLICT(key) DO UPDATE SET value='1'").run();
@@ -209,13 +331,6 @@ function migrateLegacyDaily() {
 }
 
 migrateLegacyDaily();
-setInterval(() => {
-  try {
-    rolloverLoops();
-  } catch (error) {
-    console.error('[loop] 自动重置失败:', error.message);
-  }
-}, 60000).unref();
 
 const app = express();
 app.set('trust proxy', 'loopback');
@@ -362,76 +477,6 @@ function pinCount(domain, excludeId = '') {
   return db.prepare("SELECT COUNT(*) AS count FROM entries WHERE json_extract(data, '$.domain')=? AND json_extract(data, '$.archivedAt') IS NULL AND json_extract(data, '$.pinnedAt') > '' AND id<>?").get(domain, excludeId).count;
 }
 
-function normalizeLoopFields(item, now = new Date()) {
-  if (item.type !== 'todo' || !['day', 'week'].includes(item.loop)) {
-    item.loop = '';
-    item.loopCompletedCount = 0;
-    item.loopCompletionKey = '';
-    item.loopPeriod = '';
-    return item;
-  }
-  item.loopCompletedCount = Math.max(0, Number(item.loopCompletedCount) || 0);
-  item.loopCompletionKey = typeof item.loopCompletionKey === 'string' ? item.loopCompletionKey : '';
-  item.loopPeriod = typeof item.loopPeriod === 'string' ? item.loopPeriod : '';
-  const period = loopKey(item, now);
-  const previousPeriod = item.loopPeriod;
-  if (item.loopPeriod !== period) {
-    item.loopPeriod = period;
-    // Archived rows are a historical record; never reopen them on rollover.
-    if (!item.archivedAt && item.status !== 'removed') {
-      item.status = 'open';
-      item.completedAt = null;
-      // Keep the recorded count, but never carry the old period's completion
-      // marker into a new period where it could suppress the next count.
-      if (item.loopCompletionKey && item.loopCompletionKey !== period) item.loopCompletionKey = '';
-      if (!previousPeriod && item.loopCompletedCount === 0) item.loopCompletionKey = '';
-    }
-  }
-  return item;
-}
-
-// Reset is based on the period key stored on the task, so midnight rollover is
-// idempotent and a completion from the previous period can never be counted twice.
-function rolloverLoops(now = new Date()) {
-  const rows = db.prepare("SELECT id,data FROM entries WHERE json_extract(data, '$.archivedAt') IS NULL AND json_extract(data, '$.type')='todo' AND json_extract(data, '$.loop') IN ('day','week')").all();
-  const changed = [];
-  for (const row of rows) {
-    const item = JSON.parse(row.data);
-    const before = JSON.stringify(item);
-    normalizeLoopFields(item, now);
-    if (JSON.stringify(item) !== before) {
-      db.prepare('UPDATE entries SET data=? WHERE id=?').run(JSON.stringify(item), item.id);
-      changed.push(item);
-    }
-  }
-  return changed;
-}
-
-function applyLoopCompletion(item, previous, now = new Date()) {
-  if (item.type !== 'todo' || !['day', 'week'].includes(item.loop)) {
-    item.loop = '';
-    item.loopCompletedCount = 0;
-    item.loopCompletionKey = '';
-    item.loopPeriod = '';
-    return item;
-  }
-  const period = loopKey(item, now);
-  const previousKey = typeof previous?.loopCompletionKey === 'string' ? previous.loopCompletionKey : '';
-  item.loopPeriod = period;
-  item.loopCompletedCount = Math.max(0, Number(item.loopCompletedCount) || 0);
-  item.loopCompletionKey = typeof item.loopCompletionKey === 'string' ? item.loopCompletionKey : '';
-  if (item.status === 'done') {
-    if (item.loopCompletionKey !== period) {
-      item.loopCompletedCount += 1;
-      item.loopCompletionKey = period;
-    }
-  } else if (previousKey && item.loopCompletionKey === previousKey) {
-    item.loopCompletedCount = Math.max(0, item.loopCompletedCount - 1);
-    item.loopCompletionKey = '';
-  }
-  return item;
-}
-
 function uploadFilesIn(item) {
   const found = new Set();
   for (const match of JSON.stringify(item).matchAll(/\/uploads\/([A-Za-z0-9._-]+)/g)) found.add(match[1]);
@@ -458,6 +503,7 @@ app.delete('/api/entries/:id', (req, res) => {
   transaction(() => {
     const linkedIds = db.prepare('SELECT owner_id FROM entry_links WHERE target_id=?').all(deleted.id).map(row => row.owner_id);
     db.prepare('DELETE FROM entries WHERE id=?').run(deleted.id);
+    db.prepare('DELETE FROM loop_completions WHERE entry_id=?').run(deleted.id);
     for (const id of linkedIds) {
       const currentRow = db.prepare('SELECT data FROM entries WHERE id=?').get(id);
       if (!currentRow) continue;
@@ -475,7 +521,6 @@ app.delete('/api/entries/:id', (req, res) => {
 });
 
 app.get('/api/entries', (req, res) => {
-  rolloverLoops();
   res.json(unarchivedEntries());
 });
 app.get('/api/archive', (req, res) => res.json(archivedEntries()));
@@ -536,9 +581,10 @@ app.post('/api/entries', (req, res) => {
     position
   };
   if (item.prefixLabel === undefined) item.prefixLabel = '';
-  applyLoopCompletion(item, null);
-  normalizeLoopFields(item);
-  save(item, res, () => recordActivity(item.domain, {created_count: 1}));
+  save(item, res, () => {
+    if (item.type === 'todo' && ['day', 'week'].includes(item.loop) && item.status === 'done') setLoopCompletion(item, true);
+    recordActivity(item.domain, {created_count: 1});
+  });
 });
 app.post('/api/entries/move', (req, res) => {
   try {
@@ -580,15 +626,32 @@ app.put('/api/entries/:id', (req, res) => {
   const row = db.prepare('SELECT data FROM entries WHERE id=?').get(req.params.id);
   if (!row) return res.status(404).json({error: '条目不存在'});
   const old = JSON.parse(row.data);
+  const hydratedOld = hydrateLoopEntry({...old}, new Date());
+  const oldCompleted = hydratedOld.status === 'done';
+  const oldLoop = ['day', 'week'].includes(old.loop) ? old.loop : '';
   const now = new Date().toISOString();
-  const item = normalizeLoopFields({...old, ...req.body, id: old.id, createdAt: old.createdAt, updatedAt: now});
-  applyLoopCompletion(item, old, new Date(now));
+  const item = {...old, ...req.body, id: old.id, createdAt: old.createdAt, updatedAt: now};
+  if (item.type !== 'todo' || !['day', 'week'].includes(item.loop)) item.loop = '';
+  const loopKindChanged = Boolean(oldLoop && item.loop && oldLoop !== item.loop);
+  if (loopKindChanged) {
+    // Changing the recurrence rule starts a new cycle. Keep historical
+    // completions, but do not turn the switch itself into a completion.
+    item.status = 'open';
+    item.completedAt = null;
+  }
+  for (const key of ['loopCompletedCount', 'loopCompletionKey', 'loopPeriod']) delete item[key];
   item.completedAt = item.type === 'todo' ? (item.status === 'done' ? (old.completedAt || now) : item.status === 'removed' ? old.completedAt : null) : null;
   item.removedAt = item.status === 'removed' ? (old.status === 'removed' ? old.removedAt : now) : null;
   const counts = {updated_count: 1};
-  if (old.status !== 'done' && item.status === 'done') counts.completed_count = 1;
+  if (!oldCompleted && item.status === 'done') counts.completed_count = 1;
   if (old.status !== 'removed' && item.status === 'removed') counts.removed_count = 1;
-  save(item, res, () => recordActivity(item.domain, counts));
+  save(item, res, () => {
+    if (old.type === 'todo' && ['day', 'week'].includes(old.loop) && oldCompleted && item.status !== 'done' && !loopKindChanged) {
+      setLoopCompletion({...old, id: old.id}, false, new Date(now));
+    }
+    if (item.type === 'todo' && ['day', 'week'].includes(item.loop) && item.status === 'done' && !oldCompleted) setLoopCompletion(item, true, new Date(now));
+    recordActivity(item.domain, counts);
+  });
 });
 function save(item, res, onSaved) {
   if (item.type === 'todo' && item.status === 'done') item.pinnedAt = '';
@@ -610,7 +673,7 @@ function save(item, res, onSaved) {
   if (links.some(id => reaches(id))) return res.status(400).json({error: '任务关系不能形成循环'});
   db.prepare('INSERT OR REPLACE INTO entries VALUES (?,?)').run(item.id, JSON.stringify(item));
   onSaved?.();
-  res.json(item);
+  res.json(hydrateLoopEntry(item));
 }
 
 app.post('/api/upload', (req, res) => {

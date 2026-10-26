@@ -228,22 +228,44 @@ try{
   assert.equal(loopDone.status,'open');assert.equal(loopDone.loopCompletedCount,0);
   loopDone=(await request('PUT','/api/entries/'+loopDone.id,{...loopDone,status:'done'})).data;
   assert.equal(loopDone.loopCompletedCount,1);
-  const once=loopDone;
   assert.equal((await request('POST','/api/entries',{domain:'Daily',type:'todo',title:'不是循环任务',content:''})).data.loop,'');
 
-  // Simulate crossing midnight by rolling the stored period key back, then
-  // reading entries to trigger the same reset used by the minute timer.
+  // A title edit is only a text update: the UUID-scoped counter must survive.
+  const renamedLoop=(await request('PUT','/api/entries/'+loopDone.id,{...loopDone,title:'改名后的每日复盘'})).data;
+  assert.equal(renamedLoop.title,'改名后的每日复盘');
+  assert.equal(renamedLoop.loopCompletedCount,1);
+  assert.equal(renamedLoop.status,'done');
+  const renamedAgain=(await request('PUT','/api/entries/'+renamedLoop.id,{...renamedLoop,title:'再换一次标题'})).data;
+  assert.equal(renamedAgain.id,renamedLoop.id);
+  assert.equal(renamedAgain.loopCompletedCount,1);
+  assert.equal(renamedAgain.status,'done');
+  const staleTitleWrite=(await request('PUT','/api/entries/'+renamedAgain.id,{...renamedAgain,title:'每日复盘'})).data;
+  assert.equal(staleTitleWrite.id,renamedLoop.id);
+  assert.equal(staleTitleWrite.loopCompletedCount,1);
+  const once=renamedLoop;
+
+  // The ledger is the source of truth. Removing this period's record simulates
+  // crossing midnight without rewriting the task JSON; the old completion stays
+  // in history, but the new period has no completion.
   await stop();
   const loopDb=new DatabaseSync(path.join(dir,'rafa.sqlite'));
-  const stored=JSON.parse(loopDb.prepare('SELECT data FROM entries WHERE id=?').get(once.id).data);
-  loopDb.prepare('UPDATE entries SET data=? WHERE id=?').run(JSON.stringify({...stored,loopPeriod:'2000-01-01',loopCompletionKey:'2000-01-01'}),once.id);
+  loopDb.prepare('UPDATE loop_completions SET period_key=? WHERE entry_id=?').run('2000-01-01',once.id);
   loopDb.close();
   await start();
   entries=(await request('GET','/api/entries')).data;
   const reset=entries.find(entry=>entry.id===once.id);
-  assert.equal(reset.status,'open');assert.equal(reset.loopCompletedCount,1);assert.equal(reset.loopCompletionKey,'');assert.notEqual(reset.loopPeriod,'2000-01-01');
+  assert.equal(reset.status,'open');assert.equal(reset.loopCompletedCount,1);assert.notEqual(reset.loopPeriod,'2000-01-01');
   const nextDone=(await request('PUT','/api/entries/'+reset.id,{...reset,status:'done'})).data;
   assert.equal(nextDone.loopCompletedCount,2);
+  const nextRenamed=(await request('PUT','/api/entries/'+nextDone.id,{...nextDone,title:'再次改名'})).data;
+  assert.equal(nextRenamed.loopCompletedCount,2);
+
+  // Switching day -> week preserves historical total but starts the new rule
+  // open. Switching back also preserves history and never invents a count.
+  const switched=(await request('PUT','/api/entries/'+nextRenamed.id,{...nextRenamed,loop:'week'})).data;
+  assert.equal(switched.loop,'week');assert.equal(switched.status,'open');assert.equal(switched.loopCompletedCount,2);
+  const switchedDone=(await request('PUT','/api/entries/'+switched.id,{...switched,status:'done'})).data;
+  assert.equal(switchedDone.loopCompletedCount,3);
 
   // A weekly task keeps its own Monday-based period.
   const weekOne=(await request('POST','/api/entries',{domain:'Life',type:'todo',status:'open',title:'每周整理',content:'',loop:'week'})).data;
