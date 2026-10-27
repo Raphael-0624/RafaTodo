@@ -538,6 +538,8 @@ app.post('/api/archive', (req, res) => {
     }
     const eligible = new Map();
     function canArchive(item, visiting = new Set()) {
+      // Keeping recurring children visible also prevents their ancestors from being archived.
+      if (item.type === 'todo' && ['day', 'week'].includes(item.loop)) return false;
       if (eligible.has(item.id)) return eligible.get(item.id);
       if (visiting.has(item.id)) return false;
       visiting.add(item.id);

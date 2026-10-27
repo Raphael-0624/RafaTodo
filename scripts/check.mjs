@@ -313,6 +313,46 @@ try{
   assert.deepEqual(await activityFor('Life'),beforeArchiveActivity);
   assert.ok((await request('GET','/api/archive')).data.some(entry=>entry.id===done.id));
 
+  // Recurring tasks and their ancestors stay visible, regardless of status or domain.
+  for(const domain of domains){
+    const placement=domain==='Work'?{workPane:'left'}:{};
+    const parent=(await request('POST','/api/entries',{...placement,domain,type:'todo',status:'done',title:'Parent of recurring task',content:''})).data;
+    const recurring=[];
+    for(const loop of ['day','week']){
+      for(const status of ['open','done','removed']){
+        const result=await request('POST','/api/entries',{...placement,domain,type:'todo',status,title:loop+' '+status,content:'',loop,parentId:status==='done'?parent.id:''});
+        assert.equal(result.status,200);
+        recurring.push(result.data);
+      }
+    }
+    const ordinary=(await request('POST','/api/entries',{...placement,domain,type:'todo',status:'done',title:'Ordinary completed task',content:''})).data;
+    const activityBefore=await activityFor(domain);
+    const result=await request('POST','/api/archive',{domain});
+    assert.equal(result.status,200);
+    const visible=new Map(result.data.items.map(item=>[item.id,item]));
+    assert.ok(visible.has(parent.id));
+    assert.ok(!visible.has(ordinary.id));
+    for(const item of recurring){
+      assert.ok(visible.has(item.id),'Archive must retain '+domain+' '+item.loop+' '+item.status);
+      const retained=visible.get(item.id);
+      assert.ok(!retained.archivedAt);
+      assert.equal(retained.status,item.status);
+      assert.equal(retained.loopCompletedCount,item.loopCompletedCount);
+      assert.equal(retained.completedAt,item.completedAt);
+      assert.equal(retained.updatedAt,item.updatedAt);
+      assert.equal(retained.parentId,item.parentId);
+    }
+    const archived=(await request('GET','/api/archive')).data;
+    assert.ok(archived.some(item=>item.id===ordinary.id));
+    assert.ok(!archived.some(item=>item.id===parent.id||recurring.some(loop=>loop.id===item.id)));
+    assertContiguousPositions(result.data.items);
+    assert.deepEqual(await activityFor(domain),activityBefore);
+    const repeated=await request('POST','/api/archive',{domain});
+    assert.equal(repeated.status,200);
+    assert.equal(repeated.data.count,0);
+    for(const item of recurring)assert.ok(repeated.data.items.some(entry=>entry.id===item.id));
+  }
+
   // A move counts once; sibling rows renumbered only by compaction keep updatedAt.
   const moveA=(await request('POST','/api/entries',{domain:'Life',type:'todo',status:'open',title:'Move A',content:''})).data;
   const moveB=(await request('POST','/api/entries',{domain:'Life',type:'todo',status:'open',title:'Move B',content:''})).data;
