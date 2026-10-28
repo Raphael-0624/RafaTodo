@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "concurrently -k \"node --env-file-if-exists=.env --watch server.js\" \"vite\"",
     "build": "vite build",
-    "start": "node --env-file-if-exists=.env server.js"
+    "start": "node --env-file-if-exists=.env server.js",
+    "test": "node scripts/check-ui.mjs && node scripts/check.mjs",
+    "test:browser": "node scripts/check-browser.mjs"
   },
   "keywords": [],
   "author": "",

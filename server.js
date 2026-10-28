@@ -4,6 +4,7 @@ import { mkdirSync, writeFileSync, unlinkSync } from 'node:fs';
 import { randomUUID, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import path from 'node:path';
 import * as entryUtils from './src/lib/entries.js';
+import {batchMoveEntries,pastedLines} from './src/lib/interactions.js';
 
 const {domains, moveEntries, nextPosition, loopPeriodKey} = entryUtils;
 const normalizeEntryLayout = typeof entryUtils.normalizeEntryLayout === 'function' ? entryUtils.normalizeEntryLayout : items => items;
@@ -523,6 +524,14 @@ app.delete('/api/entries/:id', (req, res) => {
 app.get('/api/entries', (req, res) => {
   res.json(unarchivedEntries());
 });
+app.get('/api/entries/:id/loop-history', (req, res) => {
+  if (!db.prepare('SELECT 1 FROM entries WHERE id=?').get(req.params.id)) return res.status(404).json({error: '条目不存在'});
+  const offset = Math.max(0, Math.floor(Number(req.query.offset) || 0));
+  const limit = 50;
+  const total = Number(db.prepare('SELECT COUNT(*) AS count FROM loop_completions WHERE entry_id=?').get(req.params.id).count);
+  const records = db.prepare('SELECT loop_kind AS loop, period_key AS period, completed_at AS completedAt FROM loop_completions WHERE entry_id=? ORDER BY completed_at DESC,period_key DESC,loop_kind LIMIT ? OFFSET ?').all(req.params.id, limit, offset);
+  res.json({entryId: req.params.id, timeZone: LOOP_TIME_ZONE, total, records, nextOffset: offset + records.length < total ? offset + records.length : null});
+});
 app.get('/api/archive', (req, res) => res.json(archivedEntries()));
 app.post('/api/archive', (req, res) => {
   const domain = req.body?.domain;
@@ -591,7 +600,7 @@ app.post('/api/entries', (req, res) => {
 app.post('/api/entries/move', (req, res) => {
   try {
     const old = readEntries();
-    const next = moveEntries(old, req.body);
+    const next = moveEntries(old, req.body).map(item => req.body.placement === 'inside' && item.id === req.body.targetId ? {...item, collapsed: false} : item);
     if (domains.some(domain => next.filter(item => !item.archivedAt && item.domain === domain && item.pinnedAt).length > 3)) throw new Error('每个栏目最多置顶 3 条');
     const byId = new Map(next.map(item => [item.id, item]));
     for (const item of next) {
@@ -624,15 +633,85 @@ app.post('/api/entries/move', (req, res) => {
     res.status(400).json({error: error.message});
   }
 });
-app.put('/api/entries/:id', (req, res) => {
-  const row = db.prepare('SELECT data FROM entries WHERE id=?').get(req.params.id);
-  if (!row) return res.status(404).json({error: '条目不存在'});
-  const old = JSON.parse(row.data);
+app.post('/api/entries/batch', (req, res) => {
+  const {ids, action, domain, workPane} = req.body || {};
+  if (!Array.isArray(ids) || !ids.length || ids.length > 200 || ids.some(id => typeof id !== 'string') || !['done', 'removed', 'move'].includes(action)) return res.status(400).json({error: '请选择 1–200 个任务和有效操作'});
+  try {
+    const selected = [...new Set(ids)];
+    transaction(() => {
+      const old = readEntries(), byId = new Map(old.map(item => [item.id, item]));
+      if (selected.some(id => !byId.has(id) || byId.get(id).archivedAt || byId.get(id).type !== 'todo')) throw new Error('部分任务已不存在或已归档，请刷新后重新选择');
+      if (action === 'move') {
+        const result = batchMoveEntries(old, selected, domain, workPane);
+        if (domains.some(name => result.items.filter(item => !item.archivedAt && item.domain === name && item.pinnedAt).length > 3)) throw new Error('目标栏目最多置顶 3 条，请先取消部分置顶');
+        persistChangedEntries(old, compactEntryPositions(result.items), {touch: (item, before) => !positionOnlyChange(before, item)});
+        for (const item of result.roots) recordActivity(domain, {updated_count: 1});
+      } else {
+        const now = new Date().toISOString();
+        for (const id of selected) {
+          if (byId.get(id).status === action) continue;
+          const row = db.prepare('SELECT data FROM entries WHERE id=?').get(id);
+          updateStoredEntry(JSON.parse(row.data), {status: action}, now);
+        }
+      }
+    });
+    res.json({count: selected.length, items: unarchivedEntries()});
+  } catch (error) { res.status(400).json({error: error.message}); }
+});
+app.post('/api/entries/import', (req, res) => {
+  const {text, domain, parentId = '', workPane = '', targetId = '', replaceId = '', placement = 'after'} = req.body || {};
+  if (typeof text !== 'string' || text.length > 200000 || !domains.includes(domain) || !['before', 'after'].includes(placement)) return res.status(400).json({error: '请检查粘贴内容和目标位置'});
+  const lines = pastedLines(text);
+  if (!lines.length || lines.length > 200) return res.status(400).json({error: '一次可拆分 1–200 个非空行'});
+  try {
+    const ids = [];
+    transaction(() => {
+      const existing = readEntries(), byId = new Map(existing.map(item => [item.id, item]));
+      const target = byId.get(targetId), parent = byId.get(parentId), replaced = byId.get(replaceId);
+      if (targetId && (!target || target.archivedAt || target.domain !== domain)) throw new Error('插入位置已失效，请重新选择');
+      if (parentId && (!parent || parent.archivedAt || parent.domain !== domain)) throw new Error('父条目已不存在');
+      if (replaceId && (!replaced || replaced.archivedAt || replaced.domain !== domain)) throw new Error('原任务已不存在，请先保留原文');
+      const actualParentId = replaced ? replaced.parentId || '' : target ? target.parentId || '' : parentId;
+      const panes = entryUtils.workPaneMap(existing);
+      const pane = domain === 'Work' ? panes.get(replaced?.id || target?.id || parent?.id) || (workPane === 'right' ? 'right' : 'left') : '';
+      let cursor = targetId;
+      const now = new Date().toISOString();
+      for (const line of lines) {
+        if (replaced && ids.length === 0) {
+          const raw = JSON.parse(db.prepare('SELECT data FROM entries WHERE id=?').get(replaceId).data);
+          const parsed = entryUtils.parseLine(line, raw, existing);
+          updateStoredEntry(raw, parsed, now);
+          ids.push(replaceId);cursor = replaceId;
+          continue;
+        }
+        const parsed = entryUtils.parseLine(line, {domain, parentId: actualParentId, workPane: pane}, existing);
+        const item = {...parsed, id: randomUUID(), position: nextPosition(readEntries(), {domain, parentId: actualParentId, workPane: pane}), createdAt: now, updatedAt: now, completedAt: parsed.type === 'todo' && parsed.status === 'done' ? now : null, removedAt: parsed.status === 'removed' ? now : null};
+        storeEntry(item, () => {
+          if (item.type === 'todo' && ['day', 'week'].includes(item.loop) && item.status === 'done') setLoopCompletion(item, true, new Date(now));
+          recordActivity(domain, {created_count: 1});
+        });
+        ids.push(item.id);
+        if (cursor) {
+          const before = readEntries();
+          persistChangedEntries(before, moveEntries(before, {id: item.id, targetId: cursor, domain, placement: ids.length === 1 ? placement : 'after'}));
+        }
+        cursor = item.id;
+      }
+      if (actualParentId) {
+        const row = db.prepare('SELECT data FROM entries WHERE id=?').get(actualParentId);
+        const value = row && JSON.parse(row.data);
+        if (value?.collapsed) db.prepare('UPDATE entries SET data=? WHERE id=?').run(JSON.stringify({...value, collapsed: false, updatedAt: now}), actualParentId);
+      }
+      compactStoredEntries();
+    });
+    res.json({count: ids.length, ids, items: unarchivedEntries()});
+  } catch (error) { res.status(400).json({error: error.message}); }
+});
+function updateStoredEntry(old, patch, now = new Date().toISOString()) {
   const hydratedOld = hydrateLoopEntry({...old}, new Date());
   const oldCompleted = hydratedOld.status === 'done';
   const oldLoop = ['day', 'week'].includes(old.loop) ? old.loop : '';
-  const now = new Date().toISOString();
-  const item = {...old, ...req.body, id: old.id, createdAt: old.createdAt, updatedAt: now};
+  const item = {...old, ...patch, id: old.id, createdAt: old.createdAt, updatedAt: now};
   if (item.type !== 'todo' || !['day', 'week'].includes(item.loop)) item.loop = '';
   const loopKindChanged = Boolean(oldLoop && item.loop && oldLoop !== item.loop);
   if (loopKindChanged) {
@@ -647,21 +726,27 @@ app.put('/api/entries/:id', (req, res) => {
   const counts = {updated_count: 1};
   if (!oldCompleted && item.status === 'done') counts.completed_count = 1;
   if (old.status !== 'removed' && item.status === 'removed') counts.removed_count = 1;
-  save(item, res, () => {
+  return storeEntry(item, () => {
     if (old.type === 'todo' && ['day', 'week'].includes(old.loop) && oldCompleted && item.status !== 'done' && !loopKindChanged) {
       setLoopCompletion({...old, id: old.id}, false, new Date(now));
     }
     if (item.type === 'todo' && ['day', 'week'].includes(item.loop) && item.status === 'done' && !oldCompleted) setLoopCompletion(item, true, new Date(now));
     recordActivity(item.domain, counts);
   });
+}
+app.put('/api/entries/:id', (req, res) => {
+  const row = db.prepare('SELECT data FROM entries WHERE id=?').get(req.params.id);
+  if (!row) return res.status(404).json({error: '条目不存在'});
+  try { res.json(transaction(() => updateStoredEntry(JSON.parse(row.data), req.body))); }
+  catch (error) { res.status(400).json({error: error.message}); }
 });
-function save(item, res, onSaved) {
+function storeEntry(item, onSaved) {
   if (item.type === 'todo' && item.status === 'done') item.pinnedAt = '';
-  if (item.type !== 'divider' && !(item.title?.trim() || item.content?.trim() || item.url || item.image)) return res.status(400).json({error: '请填写内容'});
-  if (!domains.includes(item.domain) || !types.includes(item.type) || !['open', 'doing', 'waiting', 'done', 'removed'].includes(item.status) || typeof item.title !== 'string' || item.title.length > 1000 || typeof item.content !== 'string' || item.content.length > 50000) return res.status(400).json({error: '请检查条目内容'});
-  if (item.pinnedAt && !item.archivedAt && pinCount(item.domain, item.id) >= 3) return res.status(400).json({error: '每个栏目最多置顶 3 条'});
-  if (item.url && !/^https?:\/\//i.test(item.url)) return res.status(400).json({error: '链接必须使用 http 或 https'});
-  if (item.parentId === item.id || (item.dependencies || []).includes(item.id)) return res.status(400).json({error: '不能关联自己'});
+  if (item.type !== 'divider' && !(item.title?.trim() || item.content?.trim() || item.url || item.image)) throw new Error('请填写内容');
+  if (!domains.includes(item.domain) || !types.includes(item.type) || !['open', 'doing', 'waiting', 'done', 'removed'].includes(item.status) || typeof item.title !== 'string' || item.title.length > 1000 || typeof item.content !== 'string' || item.content.length > 50000) throw new Error('请检查条目内容');
+  if (item.pinnedAt && !item.archivedAt && pinCount(item.domain, item.id) >= 3) throw new Error('每个栏目最多置顶 3 条');
+  if (item.url && !/^https?:\/\//i.test(item.url)) throw new Error('链接必须使用 http 或 https');
+  if (item.parentId === item.id || (item.dependencies || []).includes(item.id)) throw new Error('不能关联自己');
   const links = [item.parentId, ...(item.dependencies || [])].filter(Boolean);
   const reaches = (id, seen = new Set()) => {
     if (id === item.id) return true;
@@ -672,10 +757,14 @@ function save(item, res, onSaved) {
     const entry = JSON.parse(row.data);
     return [entry.parentId, ...(entry.dependencies || [])].filter(Boolean).some(next => reaches(next, seen));
   };
-  if (links.some(id => reaches(id))) return res.status(400).json({error: '任务关系不能形成循环'});
+  if (links.some(id => reaches(id))) throw new Error('任务关系不能形成循环');
   db.prepare('INSERT OR REPLACE INTO entries VALUES (?,?)').run(item.id, JSON.stringify(item));
   onSaved?.();
-  res.json(hydrateLoopEntry(item));
+  return hydrateLoopEntry(item);
+}
+function save(item, res, onSaved) {
+  try { res.json(transaction(() => storeEntry(item, onSaved))); }
+  catch (error) { res.status(400).json({error: error.message}); }
 }
 
 app.post('/api/upload', (req, res) => {

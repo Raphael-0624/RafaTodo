@@ -154,6 +154,9 @@ try{
   assert.match(setPassword('original'),/原有登录会话已失效/);
   await start();
   assert.equal((await request('GET','/api/entries')).status,401);
+  assert.equal((await request('GET','/api/entries/missing/loop-history')).status,401);
+  assert.equal((await request('POST','/api/entries/batch',{ids:['missing'],action:'done'})).status,401);
+  assert.equal((await request('POST','/api/entries/import',{text:'one\ntwo',domain:'Work'})).status,401);
   assert.equal(await assetStatus('/uploads/missing.png'),401);
   assert.equal((await request('POST','/api/auth/login',{password:'bad'})).status,401);
   assert.equal((await request('POST','/api/auth/login',{password:'original'})).status,200);
@@ -401,9 +404,83 @@ try{
   assert.match(cleanupApply.stdout,/已删除 1 个孤立文件/);
   assert.ok(!existsSync(orphanPath));
 
+  // Bulk status changes are atomic, and only explicitly selected tasks change status.
+  const batchParent=(await request('POST','/api/entries',{domain:'Work',workPane:'right',type:'todo',status:'open',title:'Batch parent',content:''})).data;
+  const batchChild=(await request('POST','/api/entries',{domain:'Work',workPane:'right',parentId:batchParent.id,type:'todo',status:'open',title:'Batch child',content:''})).data;
+  const batchLoop=(await request('POST','/api/entries',{domain:'Work',workPane:'right',type:'todo',loop:'day',status:'open',title:'Batch daily',content:''})).data;
+  const invalidBatch=await request('POST','/api/entries/batch',{ids:[batchParent.id,'missing'],action:'done'});
+  assert.equal(invalidBatch.status,400);
+  assert.equal((await request('GET','/api/entries')).data.find(item=>item.id===batchParent.id).status,'open');
+  let bulk=await request('POST','/api/entries/batch',{ids:[batchParent.id,batchLoop.id,batchLoop.id],action:'done'});
+  assert.equal(bulk.status,200);assert.equal(bulk.data.count,2);
+  assert.equal(bulk.data.items.find(item=>item.id===batchChild.id).status,'open');
+  assert.equal(bulk.data.items.find(item=>item.id===batchLoop.id).loopCompletedCount,1);
+  bulk=await request('POST','/api/entries/batch',{ids:[batchLoop.id],action:'done'});
+  assert.equal(bulk.data.items.find(item=>item.id===batchLoop.id).loopCompletedCount,1);
+  bulk=await request('POST','/api/entries/batch',{ids:[batchLoop.id],action:'removed'});
+  assert.equal(bulk.data.items.find(item=>item.id===batchLoop.id).loopCompletedCount,0);
+  const movedBulk=await request('POST','/api/entries/batch',{ids:[batchChild.id,batchParent.id],action:'move',domain:'Daily'});
+  assert.equal(movedBulk.status,200);
+  assert.equal(movedBulk.data.items.find(item=>item.id===batchChild.id).parentId,batchParent.id);
+  assert.equal(movedBulk.data.items.find(item=>item.id===batchChild.id).domain,'Daily');
+  assert.equal(movedBulk.data.items.find(item=>item.id===batchParent.id).domain,'Daily');
+  assertContiguousPositions(movedBulk.data.items);
+  assert.equal((await request('POST','/api/entries/batch',{ids:[],action:'done'})).status,400);
+  assert.equal((await request('POST','/api/entries/batch',{ids:[batchParent.id],action:'delete'})).status,400);
+  assert.equal((await request('POST','/api/entries/batch',{ids:[batchParent.id],action:'move',domain:'Work',workPane:'invalid'})).status,400);
+  assert.equal((await request('POST','/api/entries/batch',{ids:Array(201).fill(batchParent.id),action:'done'})).status,400);
+
+  // Imports retain the insertion point and pane; failures roll back every line and activity count.
+  const importParent=(await request('POST','/api/entries',{domain:'Work',workPane:'right',type:'todo',title:'Import parent',content:'',collapsed:true})).data;
+  const imported=await request('POST','/api/entries/import',{domain:'Work',workPane:'left',parentId:importParent.id,text:'%需求 First\r\n\r\nSecond !loop-day\nThird'});
+  assert.equal(imported.status,200);assert.equal(imported.data.count,3);
+  let importedRows=imported.data.ids.map(id=>imported.data.items.find(item=>item.id===id));
+  assert.deepEqual(importedRows.map(item=>item.title),['First','Second','Third']);
+  assert.ok(importedRows.every(item=>item.parentId===importParent.id&&item.workPane==='right'));
+  assert.equal(importedRows[0].prefixLabel,'需求');assert.equal(importedRows[1].loop,'day');
+  assert.equal(imported.data.items.find(item=>item.id===importParent.id).collapsed,false);
+  const between=await request('POST','/api/entries/import',{domain:'Work',targetId:importedRows[1].id,placement:'before',text:'Between A\nBetween B'});
+  assert.equal(between.status,200);
+  assert.deepEqual(between.data.items.filter(item=>item.parentId===importParent.id).sort((a,b)=>a.position-b.position).map(item=>item.title),['First','Between A','Between B','Second','Third']);
+  const beforeFailedImport=(await request('GET','/api/entries')).data;
+  const activityBeforeImport=await activityFor('Work');
+  const failedImport=await request('POST','/api/entries/import',{domain:'Work',text:'Valid line\n'+('x'.repeat(1001))});
+  assert.equal(failedImport.status,400);
+  assert.deepEqual((await request('GET','/api/entries')).data,beforeFailedImport);
+  assert.deepEqual(await activityFor('Work'),activityBeforeImport);
+  const replaced=await request('POST','/api/entries/import',{domain:'Work',replaceId:importedRows[0].id,text:'Renamed first\nNew sibling'});
+  assert.equal(replaced.status,200);assert.equal(replaced.data.ids[0],importedRows[0].id);
+  assert.equal(replaced.data.items.find(item=>item.id===importedRows[0].id).title,'Renamed first');
+  assert.ok(replaced.data.ids.every(id=>replaced.data.items.find(item=>item.id===id).workPane==='right'));
+  assert.equal((await request('POST','/api/entries/import',{domain:'Work',text:Array(201).fill('task').join('\n')})).status,400);
+  assert.equal((await request('POST','/api/entries/import',{domain:'Work',parentId:'missing',text:'a\nb'})).status,400);
+  const dropResult=await request('POST','/api/entries/move',{id:batchLoop.id,targetId:importParent.id,domain:'Work',placement:'inside'});
+  assert.equal(dropResult.status,200);assert.equal(dropResult.data.find(item=>item.id===importParent.id).collapsed,false);
+
+  // History belongs to an immutable task ID, includes both recurrence rules, and paginates.
+  let history=await request('GET','/api/entries/'+batchLoop.id+'/loop-history');
+  assert.equal(history.status,200);assert.equal(history.data.total,0);assert.deepEqual(history.data.records,[]);
+  history=await request('GET','/api/entries/'+switchedDone.id+'/loop-history');
+  assert.equal(history.status,200);assert.equal(history.data.total,3);
+  assert.ok(history.data.records.some(record=>record.loop==='day'));
+  assert.ok(history.data.records.some(record=>record.loop==='week'));
+  assert.equal((await request('GET','/api/entries/missing/loop-history')).status,404);
+  await stop();
+  const historyDb=new DatabaseSync(path.join(dir,'rafa.sqlite'));
+  for(let index=0;index<51;index++){
+    const date=new Date(Date.UTC(2020,0,index+1)).toISOString();
+    historyDb.prepare('INSERT INTO loop_completions VALUES (?,?,?,?)').run(batchLoop.id,'day',date.slice(0,10),date);
+  }
+  historyDb.close();await start();
+  history=await request('GET','/api/entries/'+batchLoop.id+'/loop-history');
+  assert.equal(history.data.total,51);assert.equal(history.data.records.length,50);assert.equal(history.data.nextOffset,50);
+  const older=(await request('GET','/api/entries/'+batchLoop.id+'/loop-history?offset=50')).data;
+  assert.equal(older.records.length,1);assert.equal(older.nextOffset,null);
+  assert.ok(history.data.records[49].completedAt>older.records[0].completedAt);
+
   for(let i=0;i<5;i++)assert.equal((await request('POST','/api/auth/login',{password:'bad'})).status,401);
   assert.equal((await request('POST','/api/auth/login',{password:'replacement'})).status,429);
-  console.log('PASS: auth persistence and revocation, login limit, append order, prefix labels, layout compaction, activity counters, uploads, migration, validation and deletion');
+  console.log('PASS: auth, ordering, collapse persistence, archive protection, atomic batch operations and imports, loop history pagination, activity, uploads, migration and validation');
 }finally{
   if(server?.exitCode===null)await stop();
   rmSync(dir,{recursive:true,force:true});

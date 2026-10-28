@@ -2,6 +2,8 @@ import React,{useState,useEffect,useLayoutEffect,useRef} from 'react';
 import {createRoot} from 'react-dom/client';
 import {Plus,ArrowUpRight,Check,TextT,LinkSimple,ImageSquare,DotsSixVertical,DotsThree,X,Trash,ArrowCounterClockwise,CaretDown,CaretRight,ChartBar,Archive,PushPin,MagicWand} from '@phosphor-icons/react';
 import {domains,parseLine,toLine,treeRows,workPaneMap,pasteLink} from './lib/entries.js';
+import {selectedSubtrees,dropPlacement,pastedLines} from './lib/interactions.js';
+import {TaskDialog,LoopHistoryDialog,SelectionBar} from './components/TaskDialogs.jsx';
 import './style.css';
 
 function newId(){
@@ -80,11 +82,12 @@ function ErrorNotice({message,retry,onClose}){
     <button className="toast-close" aria-label="关闭提示" title="关闭" onClick={onClose}>×</button>
   </div>;
 }
-function LoopLabel({item}){
+function LoopLabel({item,onHistory}){
   if(item.type!=='todo'||!['day','week'].includes(item.loop))return null;
-  return <span className={'loop-label loop-'+item.loop}>{item.loop==='day'?'每日':'每周'} | {item.loopCompletedCount||0}次</span>;
+  const Tag=onHistory?'button':'span';
+  return <Tag className={'loop-label loop-'+item.loop} {...(onHistory?{type:'button',title:'查看完成记录',onClick:event=>{event.stopPropagation();onHistory(item);},onKeyDown:event=>event.stopPropagation()}: {})}>{item.loop==='day'?'每日':'每周'} | {item.loopCompletedCount||0}次</Tag>;
 }
-function ArchiveModal({open,items,onClose}){
+function ArchiveModal({open,items,onClose,onLoopHistory}){
   if(!open)return null;
   const byId=new Map(items.map(item=>[item.id,item]));
   const archiveTime=item=>item.archivedAt||item.completedAt||item.removedAt||'';
@@ -110,7 +113,7 @@ function ArchiveModal({open,items,onClose}){
     <div className="archive-head"><div><strong>归档</strong><span className="archive-total">{items.length} 条</span></div><button onClick={onClose} aria-label="关闭归档">×</button></div>
     {domains.map(domain=>{const rows=rowsFor(domain);return <section className="archive-section" key={domain}><h2><span className={'archive-domain-dot archive-domain-'+domain.replace(/\W/g,'').toLowerCase()}/>{domain==='Glean & Idea'?'GLEAN & IDEA':domain.toUpperCase()} <span>{rows.length}</span></h2>{rows.length?<div className="archive-list">{rows.map(({item,depth})=><article className="archive-item" key={item.id} style={{'--archive-depth':depth}}>
       <div className="archive-item-head"><span className={'archive-status archive-status-'+item.status}><i/>{item.status==='done'?'已完成':item.status==='removed'?'已取消':'已归档'}</span><span className="archive-type">{typeName(item)}</span><time title={'归档时间 '+stamp(item.archivedAt)}>{stamp(archiveTime(item))}</time></div>
-      <div className="archive-title"><LoopLabel item={item}/>{item.prefixLabel&&<span className="prefix-label">{item.prefixLabel}</span>}{inline(titleOf(item))}</div>
+      <div className="archive-title"><LoopLabel item={item} onHistory={onLoopHistory}/>{item.prefixLabel&&<span className="prefix-label">{item.prefixLabel}</span>}{inline(titleOf(item))}</div>
       {item.content&&<p className="archive-note">{inline(item.content)}</p>}
       {item.image&&<img className="archive-image" src={item.image} alt={item.title||'归档图片'}/>}
       {item.url&&<a className="archive-link" href={item.url} target="_blank" rel="noreferrer">{item.url}</a>}
@@ -121,7 +124,7 @@ function ArchiveModal({open,items,onClose}){
 }
 const HEATMAP_DOMAINS=[['Work','WORK'],['Daily','DAILY'],['Life','LIFE'],['Glean & Idea','GLEAN']];
 const heatLevel=count=>count<=0?0:count===1?1:count<=3?2:count<=6?3:4;
-function Heatmap({items,open,onClose}){
+function Heatmap({items,open,onClose,onLoopHistory}){
   const [activeDomains,setActiveDomains]=useState(()=>new Set(HEATMAP_DOMAINS.map(([value])=>value))),[activity,setActivity]=useState([]),[selected,setSelected]=useState(()=>dayKey(new Date())),[hovered,setHovered]=useState(null);
   useEffect(()=>{if(!open)return;setSelected(dayKey(new Date()));const end=new Date(),start=new Date(end);start.setDate(end.getDate()-364);api('/api/activity?from='+dayKey(start)+'&to='+dayKey(end)).then(setActivity).catch(()=>setActivity([]));},[open]);
   if(!open)return null;
@@ -142,17 +145,17 @@ function Heatmap({items,open,onClose}){
     <div className="heatmap-months" aria-hidden="true"><span className="heatmap-month-spacer"/><div className="heatmap-month-cells">{monthMarks.map((mark,index)=><span key={mark.key} className={'heatmap-month-mark'+(index===0?' first':'')+(mark.showYear?' show-year':'')+((index===monthMarks.length-1&&53-mark.start<5)?' end':'')} style={{gridColumn:(mark.start+1)+' / span '+Math.max(1,mark.end-mark.start)}} title={mark.year+'年'+mark.month+'月'}>{mark.showYear&&<small>{mark.year}</small>}{mark.month}月</span>)}</div></div>
     <div className="heatmap-grid" aria-label="最近一年活动"><div className="heatmap-weekdays"><span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span></div><div className="heatmap-cells">{cells.map((date,index)=>{const rows=byDate.get(date)||[],byDomain=new Map(rows.map(row=>[row.domain,row])),present=HEATMAP_DOMAINS.map(([value,label])=>{const row=byDomain.get(value),count=row?Number(row.created||0)+Number(row.completed||0)+Number(row.updated||0)+Number(row.removed||0):0;return {value,label,count};}).filter(entry=>entry.count>0),active=present.filter(entry=>activeDomains.has(entry.value)),description=[date,...detail(date)].join('\n');return <button key={date+'-'+index} className={'heat-cell count-'+active.length+(selected===date?' selected':'')} aria-label={description} onMouseEnter={event=>{const rect=event.currentTarget.getBoundingClientRect();setHovered({date,x:Math.min(rect.left,window.innerWidth-240),y:rect.bottom+8});}} onMouseLeave={()=>setHovered(null)} onFocus={event=>{const rect=event.currentTarget.getBoundingClientRect();setHovered({date,x:Math.min(rect.left,window.innerWidth-240),y:rect.bottom+8});}} onBlur={()=>setHovered(null)} onClick={()=>setSelected(date)}>{active.map(({value,label,count})=><i key={value} className={'heat-domain-'+value.replace(/\W/g,'').toLowerCase()+' level-'+heatLevel(count)} title={label+' '+count}/>)}</button>})}</div></div>
     {hovered&&<div className="heatmap-tooltip" style={{left:Math.max(8,hovered.x),top:Math.min(hovered.y,window.innerHeight-120)}} role="tooltip"><strong>{hovered.date}</strong>{detail(hovered.date).map((line,index)=><span key={index}>{line}</span>)}</div>}
-    <div className={'heatmap-detail'+(selected?' has-selection':'')}>{selected?<><div className="heatmap-detail-head"><strong>{selected}</strong><span>{detail(selected).join(' · ')||'无活动'}</span></div>{selectedItems.length?<div className="heatmap-items">{selectedItems.map(item=><div className="heatmap-task" key={item.id} role="button" tabIndex={0} onClick={()=>{onClose();document.querySelector(`[data-entry-id="${item.id}"]`)?.scrollIntoView({behavior:'smooth',block:'center'});}} onKeyDown={event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();onClose();document.querySelector(`[data-entry-id="${item.id}"]`)?.scrollIntoView({behavior:'smooth',block:'center'});}}} aria-label={'定位 '+titleOf(item)}><div className="entry-read"><div className="entry-body"><EntryContent item={item} items={items}/></div></div></div>)}</div>:<span className="heatmap-empty">当天没有可回顾的条目</span>}</>:<p className="heatmap-detail-placeholder">点击日期查看当天回顾</p>}</div>
+    <div className={'heatmap-detail'+(selected?' has-selection':'')}>{selected?<><div className="heatmap-detail-head"><strong>{selected}</strong><span>{detail(selected).join(' · ')||'无活动'}</span></div>{selectedItems.length?<div className="heatmap-items">{selectedItems.map(item=><div className="heatmap-task" key={item.id} role="button" tabIndex={0} onClick={()=>{onClose();document.querySelector(`[data-entry-id="${item.id}"]`)?.scrollIntoView({behavior:'smooth',block:'center'});}} onKeyDown={event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();onClose();document.querySelector(`[data-entry-id="${item.id}"]`)?.scrollIntoView({behavior:'smooth',block:'center'});}}} aria-label={'定位 '+titleOf(item)}><div className="entry-read"><div className="entry-body"><EntryContent item={item} items={items} onLoopHistory={onLoopHistory}/></div></div></div>)}</div>:<span className="heatmap-empty">当天没有可回顾的条目</span>}</>:<p className="heatmap-detail-placeholder">点击日期查看当天回顾</p>}</div>
     </div>
   </div>;
 }
-function EntryContent({item,items=[]}) {
+function EntryContent({item,items=[],onLoopHistory}) {
   const divider=item.type==='divider',done=item.status==='done',removed=item.status==='removed';
   const overdue=item.type==='todo'&&item.dueDate&&item.dueDate<new Date().toLocaleDateString('en-CA')&&!done&&!removed;
   const statusDate=removed?item.removedAt:done?item.completedAt:null;
   const statusCaption=statusDate?new Date(statusDate).toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'})+(removed?'取消':'完成'):'';
   return <>
-          <span className="entry-title">{divider?<span className="md-rule"/>:<><LoopLabel item={item}/>{item.prefixLabel&&<span className="prefix-label">{item.prefixLabel}</span>}{inline(titleOf(item))}</>}</span>
+          <span className="entry-title">{divider?<span className="md-rule"/>:<><LoopLabel item={item} onHistory={onLoopHistory}/>{item.prefixLabel&&<span className="prefix-label">{item.prefixLabel}</span>}{inline(titleOf(item))}</>}</span>
           {item.content&&item.title&&<span className="entry-note">{item.content.split('\n').map((line,index)=><span className="note-line" key={index}>{inline(line)}</span>)}</span>}
           {item.image&&<img className="thumb" src={item.image} alt={item.title||'条目图片'}/>}
           <span className="entry-meta">
@@ -182,7 +185,7 @@ function InboxDialog({onClose,children}) {
   return <dialog ref={dialog} className="inbox-drafts" aria-label="AI 草稿预览" onCancel={onClose} onClose={onClose} onClick={event=>{if(event.target===event.currentTarget){const rect=event.currentTarget.getBoundingClientRect();if(event.clientX<rect.left||event.clientX>rect.right||event.clientY<rect.top||event.clientY>rect.bottom)onClose();}}}>{children}</dialog>;
 }
 
-const Editor=React.memo(function EntryEditor({draft,items,initialText,onSave,onClose,onUpload,onIndent,onNext,onTextChange}){
+const Editor=React.memo(function EntryEditor({draft,items,initialText,onSave,onClose,onUpload,onIndent,onNext,onTextChange,onPasteChoice}){
   const [text,setTextState]=useState(initialText),textarea=useRef(null);
   const [hint,setHint]=useState(null),[choice,setChoice]=useState(0);
   const presets=React.useMemo(()=>{
@@ -220,7 +223,7 @@ const Editor=React.memo(function EntryEditor({draft,items,initialText,onSave,onC
     <span className={'write-mark '+(preview.type==='todo'?'task-mark':'')}>{preview.type==='text'?<TextT size={15}/>:preview.type==='link'?<LinkSimple size={15}/>:preview.type==='image'?<ImageSquare size={15}/>:null}</span>
     <div className="write-input">
         <textarea ref={textarea} autoFocus rows="1" aria-label="直接编辑条目" placeholder="写一条…" value={text} onChange={event=>{setText(event.target.value);suggest(event.target.value,event.target.selectionStart);}} onClick={event=>suggest(text,event.target.selectionStart)}
-        onPaste={event=>{const file=Array.from(event.clipboardData.files).find(file=>file.type.startsWith('image/'));if(file){event.preventDefault();onUpload(file);return;}const value=event.clipboardData.getData('text/plain').trim(),start=event.target.selectionStart,end=event.target.selectionEnd;const result=pasteLink(text,start,end,value);if(result){event.preventDefault();setText(result.text);requestAnimationFrame(()=>{textarea.current?.focus();textarea.current?.setSelectionRange(result.caret,result.caret);});return;}if(start===end&&/^https?:\/\/[^\s<>]+$/i.test(value)){event.preventDefault();const inserted=text.slice(0,start)+value+text.slice(end);setText(inserted);requestAnimationFrame(()=>{textarea.current?.focus();textarea.current?.setSelectionRange(start+value.length,start+value.length);});(async()=>{try{const preview=await api('/api/link-preview','POST',{url:value});const title=String(preview.title||'').trim();if(!title||textarea.current?.value!==inserted)return;const safeTitle=title.replace(/[\[\]\n]/g,' ').trim();const next=text.slice(0,start)+'['+safeTitle+']('+value+')'+text.slice(end);setText(next);requestAnimationFrame(()=>{textarea.current?.focus();textarea.current?.setSelectionRange(start+('['+safeTitle+']('+value+')').length,start+('['+safeTitle+']('+value+')').length);});}catch{}})();}}}
+        onPaste={event=>{const file=Array.from(event.clipboardData.files).find(file=>file.type.startsWith('image/'));if(file){event.preventDefault();onUpload(file);return;}const raw=event.clipboardData.getData('text/plain').replace(/\r\n?/g,'\n'),value=raw.trim(),start=event.target.selectionStart,end=event.target.selectionEnd;if(pastedLines(raw).length>1&&onPasteChoice){event.preventDefault();const inserted=text.slice(0,start)+raw+text.slice(end),focus=()=>{textarea.current?.focus();textarea.current?.setSelectionRange(start+raw.length,start+raw.length);};onPasteChoice({text:inserted,focus,applySingle:()=>{setText(inserted);focus();}});return;}const result=pasteLink(text,start,end,value);if(result){event.preventDefault();setText(result.text);requestAnimationFrame(()=>{textarea.current?.focus();textarea.current?.setSelectionRange(result.caret,result.caret);});return;}if(start===end&&/^https?:\/\/[^\s<>]+$/i.test(value)){event.preventDefault();const inserted=text.slice(0,start)+value+text.slice(end);setText(inserted);requestAnimationFrame(()=>{textarea.current?.focus();textarea.current?.setSelectionRange(start+value.length,start+value.length);});(async()=>{try{const preview=await api('/api/link-preview','POST',{url:value});const title=String(preview.title||'').trim();if(!title||textarea.current?.value!==inserted)return;const safeTitle=title.replace(/[\[\]\n]/g,' ').trim();const next=text.slice(0,start)+'['+safeTitle+']('+value+')'+text.slice(end);setText(next);requestAnimationFrame(()=>{textarea.current?.focus();textarea.current?.setSelectionRange(start+('['+safeTitle+']('+value+')').length,start+('['+safeTitle+']('+value+')').length);});}catch{}})();}}}
         onKeyDown={event=>{
           if(event.nativeEvent.isComposing||event.keyCode===229)return;
           if((event.metaKey||event.ctrlKey)&&event.shiftKey&&event.key==='Enter'){event.preventDefault();onNext(text);return;}
@@ -250,6 +253,10 @@ function App(){
   const [picker,setPicker]=useState('');
   const [heatmapOpen,setHeatmapOpen]=useState(false);
   const [archiveOpen,setArchiveOpen]=useState(false),[archived,setArchived]=useState([]),[archiveBusy,setArchiveBusy]=useState(false);
+  const [loopHistory,setLoopHistory]=useState(null);
+  const [selectMode,setSelectMode]=useState(false),[selected,setSelected]=useState(()=>new Set()),[batchBusy,setBatchBusy]=useState(false),[batchReview,setBatchReview]=useState(''),[batchDestination,setBatchDestination]=useState('');
+  const [pasteChoice,setPasteChoice]=useState(null),[pasteBusy,setPasteBusy]=useState(false);
+  const batchLock=useRef(false),pasteLock=useRef(false);
   const [zen,setZen]=useState(null),[zenNow,setZenNow]=useState(Date.now()),[zenConfirm,setZenConfirm]=useState('');
   const [inboxText,setInboxText]=useState(()=>readStored('rafa-inbox-text','')),[inboxBatches,setInboxBatches]=useState(()=>readStored('rafa-inbox-batches',[])),[inboxBusy,setInboxBusy]=useState(false),[inboxAdopting,setInboxAdopting]=useState(''),[inboxPhase,setInboxPhase]=useState(''),[inboxOpen,setInboxOpen]=useState(false);
   const autoProcessed=useRef(readStored('rafa-inbox-auto-source',''));
@@ -305,7 +312,7 @@ function App(){
   useEffect(()=>{try{localStorage.setItem('rafa-layout',JSON.stringify(layout));}catch{}},[layout]);
   useEffect(()=>{
     if(!authenticated)return;
-    const refresh=()=>{if(document.visibilityState!=='visible')return;api('/api/entries').then(entries=>{itemsRef.current=entries;setItems(entries);}).catch(()=>{});};
+    const refresh=()=>{if(document.visibilityState!=='visible'||saving.current.size||batchLock.current||pasteLock.current)return;api('/api/entries').then(entries=>{if(saving.current.size||batchLock.current||pasteLock.current)return;itemsRef.current=entries;setItems(entries);}).catch(()=>{});};
     const timer=setInterval(refresh,30000);
     window.addEventListener('focus',refresh);document.addEventListener('visibilitychange',refresh);
     return ()=>{clearInterval(timer);window.removeEventListener('focus',refresh);document.removeEventListener('visibilitychange',refresh);};
@@ -355,13 +362,57 @@ function App(){
   useEffect(()=>()=>{drag.current?.cleanup?.();},[]);
   useEffect(()=>{
     if(!draft)return;
-    const commit=event=>{if(!event.target.closest('.write-row, .drag-handle, .row-actions, .group-controls'))save();};
+    const commit=event=>{if(!event.target.closest('.write-row, .drag-handle, .row-actions, .group-controls, .task-dialog'))save();};
     document.addEventListener('pointerdown',commit);
     return ()=>document.removeEventListener('pointerdown',commit);
   },[draft?.editorKey,draft?.editorSeed,draft?.id,draft?.domain,draft?.workPane]);
   useEffect(()=>{const closeTransient=event=>{if(!event.target.closest('.context-menu,.row-actions'))setMenu(null);if(!event.target.closest('.row-actions,.context-menu'))setConfirmDelete('');if(!event.target.closest('.column-archive'))setConfirmArchive('');};document.addEventListener('pointerdown',closeTransient);return()=>document.removeEventListener('pointerdown',closeTransient);},[]);
   async function archiveDomain(domain){if(archiveBusy)return;if(confirmArchive!==domain){setConfirmArchive(domain);return;}setConfirmArchive('');setArchiveBusy(true);setError('');try{const result=await api('/api/archive','POST',{domain});itemsRef.current=result.items;setItems(result.items);setArchived(await api('/api/archive'));setError(result.count?`已归档 ${result.count} 条`:'没有可归档的内容');}catch(e){setError(e.message);}finally{setArchiveBusy(false);}}
   async function openArchive(){setArchiveOpen(true);try{setArchived(await api('/api/archive'));}catch(e){setError(e.message);}}
+  async function toggleSelectMode(){
+    if(batchBusy||pasteBusy)return;
+    if(!selectMode&&draft&&!await save())return;
+    setSelectMode(!selectMode);setSelected(new Set());setMenu(null);setBatchReview('');
+  }
+  function toggleSelected(id){
+    if(batchBusy)return;
+    setBatchReview('');
+    setSelected(previous=>{const next=new Set(previous);if(next.has(id))next.delete(id);else if(next.size<200)next.add(id);return next;});
+  }
+  function selectVisibleTasks(){
+    const visible=[...board.current.querySelectorAll('[data-entry-id]')].map(node=>node.dataset.entryId).filter(id=>byId.get(id)?.type==='todo');
+    setSelected(new Set(visible.slice(0,200)));setBatchReview('');
+    if(visible.length>200)setError('一次最多选择 200 个任务，已选前 200 项');
+  }
+  useEffect(()=>{
+    setSelected(previous=>{const next=new Set([...previous].filter(id=>items.some(item=>item.id===id&&item.type==='todo')));return next.size===previous.size?previous:next;});
+  },[items]);
+  useEffect(()=>{
+    if(!selectMode)return;
+    const escape=event=>{if(event.key==='Escape'&&!batchLock.current&&!batchReview){setSelectMode(false);setSelected(new Set());}};
+    document.addEventListener('keydown',escape);return()=>document.removeEventListener('keydown',escape);
+  },[selectMode,batchReview]);
+  async function runBatch(){
+    if(batchLock.current||!selected.size||!batchReview)return;
+    batchLock.current=true;setBatchBusy(true);setError('');
+    const [domain,workPane]=batchDestination.split(':');
+    try{
+      const result=await api('/api/entries/batch','POST',{ids:[...selected],action:batchReview,domain,workPane});
+      applyItems(result.items);setSelected(new Set());setSelectMode(false);setBatchReview('');
+      setError(`已${batchReview==='move'?'移动':batchReview==='done'?'完成':'取消'} ${result.count} 个任务`);
+    }catch(error){setError(error.message);}
+    finally{batchLock.current=false;setBatchBusy(false);}
+  }
+  async function splitPaste(){
+    if(pasteLock.current||!pasteChoice||!draftRef.current)return;
+    pasteLock.current=true;setPasteBusy(true);setError('');
+    const current=draftRef.current;
+    try{
+      const result=await api('/api/entries/import','POST',{text:pasteChoice.text,domain:current.domain,parentId:current.parentId||'',workPane:current.workPane||'',replaceId:current.id||'',targetId:current.id?'':current.insert?.targetId||'',placement:current.insert?.placement||'after'});
+      applyItems(result.items);close();setPasteChoice(null);setError(`已拆分为 ${result.count} 条`);
+    }catch(error){setError(error.message);}
+    finally{pasteLock.current=false;setPasteBusy(false);}
+  }
   function replaceItem(saved,options){applyItems(itemsRef.current.some(item=>item.id===saved.id)?itemsRef.current.map(item=>item.id===saved.id?saved:item):[...itemsRef.current,saved],options);}
   function updateInboxDraft(batchId,draftId,patch){setInboxBatches(previous=>previous.map(batch=>batch.id!==batchId?batch:{...batch,drafts:batch.drafts.map(draft=>draft.id===draftId?{...draft,...patch}:draft)}));}
   async function runInboxAI(source=inboxText.trim()){
@@ -514,12 +565,17 @@ function App(){
     try{applyItems(await api('/api/entries/move','POST',spec));feedback(spec.id);}catch(e){setError(e.message,()=>move(spec));}finally{markPending('move',false);}
   }
   function beginDrag(event,item){
-    if(event.button!==0||pending.has('move'))return;
+    if(selectMode||event.button!==0||pending.has('move'))return;
+    drag.current?.cleanup?.();
+    const blocked=descendantsOf(item.id);blocked.add(item.id);
     const start={x:event.clientX,y:event.clientY},state={id:item.id,active:false};
+    let scrollFrame=0,scrollNode=null,scrollSpeed=0,lastPoint=null;
+    function scroll(){if(scrollNode&&scrollSpeed){const top=scrollNode.scrollTop;scrollNode.scrollBy(0,scrollSpeed);if(top!==scrollNode.scrollTop&&lastPoint)point(lastPoint);}scrollFrame=requestAnimationFrame(scroll);}
     drag.current=state;
     function point(event){
+      lastPoint={clientX:event.clientX,clientY:event.clientY,preventDefault(){}};
       if(!state.active&&Math.hypot(event.clientX-start.x,event.clientY-start.y)<5)return;
-      if(!state.active){state.active=true;setDragging(item.id);document.body.classList.add('is-dragging');}
+      if(!state.active){state.active=true;setDragging(item.id);document.body.classList.add('is-dragging');scrollFrame=requestAnimationFrame(scroll);}
       event.preventDefault();
       const node=document.elementFromPoint(event.clientX,event.clientY);
       const row=node?.closest('[data-entry-id]'),column=node?.closest('[data-domain]');
@@ -530,19 +586,20 @@ function App(){
         const groupBlock=node?.closest('.group-block');
         if(!row&&groupBlock){const groupRow=groupBlock.querySelector('[data-entry-id]');if(groupRow)next={id:item.id,targetId:groupRow.dataset.entryId,domain,workPane:pane,placement:'inside'};}
         if(row){
-          const box=row.getBoundingClientRect(),portion=(event.clientY-box.top)/box.height;
+          const box=row.getBoundingClientRect();
           const target=itemsRef.current.find(entry=>entry.id===row.dataset.entryId);
-          if(target&&target.id!==item.id){
-            const indent=Number(row.dataset.depth||0)*22;
-            const placement=portion>.25&&portion<.75&&event.clientX>box.left+indent+55?'inside':portion<.5?'before':'after';
+          if(target&&!blocked.has(target.id)){
+            const placement=dropPlacement({x:event.clientX,y:event.clientY,left:box.left,top:box.top,height:box.height,allowInside:target.type!=='divider'});
             next={id:item.id,targetId:target.id,domain,workPane:pane,placement};
           }
         }else if(!next)next={id:item.id,domain,workPane:pane,placement:'end'};
       }
-      currentDrop.current=next;setDrop(next);
+      if(next&&blocked.has(next.targetId))next=null;
+      if(node?.closest('.column-head,.pinned-list,.inbox-wrap,.divider'))next=null;
+      currentDrop.current=next;setDrop(next);scrollNode=null;scrollSpeed=0;
       if(column){
         const workColumn=node?.closest('[data-work-pane]'),scroller=workColumn?.querySelector('.work-col-scroll')||column.querySelector('.column-scroll'),box=scroller?.getBoundingClientRect();
-        if(box&&scroller){if(event.clientY<box.top+45)scroller.scrollBy(0,-12);if(event.clientY>box.bottom-45)scroller.scrollBy(0,12);}
+        if(box&&scroller){scrollNode=scroller;if(event.clientY<box.top+45)scrollSpeed=-8;if(event.clientY>box.bottom-45)scrollSpeed=8;}
       }
     }
     async function finish(){
@@ -552,12 +609,15 @@ function App(){
       if(state.active&&spec){if(draftRef.current&&!await save())return;await move(spec);}
     }
     function cancel(){cleanup();}
+    function escape(event){if(event.key==='Escape'){event.preventDefault();cancel();}}
     function cleanup(){
       window.removeEventListener('pointermove',point);window.removeEventListener('pointerup',finish);window.removeEventListener('pointercancel',cancel);
+      window.removeEventListener('keydown',escape);cancelAnimationFrame(scrollFrame);
       document.body.classList.remove('is-dragging');setDragging('');setDrop(null);drag.current=null;currentDrop.current=null;
     }
     state.cleanup=cleanup;
     window.addEventListener('pointermove',point,{passive:false});window.addEventListener('pointerup',finish,{once:true});window.addEventListener('pointercancel',cancel,{once:true});
+    window.addEventListener('keydown',escape);
   }
   async function insertNextTask(source){
     if(!draft||pending.has(draft.id||draft.editorKey||'new'))return;
@@ -596,7 +656,7 @@ function App(){
     }catch(e){setError(e.message);}finally{markPending('upload',false);}
   }
   function editor(){
-    return <EntryEditor key={draft.editorKey||draft.id} draft={draft} items={items} initialText={draft.editorSeed||''} onTextChange={value=>{editorTextRef.current=value;}} onSave={source=>save(true,source)} onClose={close} onUpload={file=>upload(file,draft)} onIndent={(outdent,source)=>indent(outdent,source)} onNext={source=>insertNextTask(source)}/>;
+    return <EntryEditor key={draft.editorKey||draft.id} draft={draft} items={items} initialText={draft.editorSeed||''} onTextChange={value=>{editorTextRef.current=value;}} onSave={source=>save(true,source)} onClose={close} onUpload={file=>upload(file,draft)} onIndent={(outdent,source)=>indent(outdent,source)} onNext={source=>insertNextTask(source)} onPasteChoice={choice=>{setError('');setPasteChoice(choice);}}/>;
   }
   function row(item,depth){
     const editing=draft?.id===item.id,done=item.status==='done',removed=item.status==='removed',group=item.type==='group',divider=item.type==='divider';
@@ -604,13 +664,14 @@ function App(){
     const tasks=items.filter(entry=>entry.id!==item.id&&descendants.has(entry.id)&&entry.type==='todo'&&entry.status!=='removed');
     const target=drop?.targetId===item.id?drop.placement:'';
     const timeTitle=[['createdAt','创建'],['updatedAt','更新'],['completedAt','完成'],['removedAt','移除']].filter(([key])=>item[key]).map(([key,name])=>name+'：'+new Date(item[key]).toLocaleString('zh-CN',{hour12:false})).join('\n');
-    return <div key={item.id} className={'entry '+(done?'is-done ':'')+(removed?'is-removed ':'')+(group?'is-group ':'')+(divider?'is-divider ':'')+(item.url?'has-link ':'')+(item.pinnedAt?'is-pinned ':'')+(dragging===item.id?'drag-source ':'')+(target?'drop-'+target:'')} data-entry-id={item.id} data-depth={depth} style={{'--depth':depth}} onPointerDown={event=>{if(event.target.closest('button,a,textarea,input,.row-actions,.group-controls,.group-picker'))return;beginDrag(event,item);}} onClick={event=>{if(event.target.closest('button,a,textarea,.entry-body,.row-actions,.group-controls,.group-picker')||editing)return;open(item);}} onContextMenu={event=>{if(event.target.closest('textarea'))return;event.preventDefault();setMenu({x:event.clientX, y:event.clientY,item});}}>
-      <button className="drag-handle" title="拖动排序；放在文字中间成为子条目" aria-label={'拖动 '+titleOf(item)} onPointerDown={event=>{event.stopPropagation();beginDrag(event,item);}}><DotsSixVertical size={14}/></button>
+    return <div key={item.id} className={'entry '+(done?'is-done ':'')+(removed?'is-removed ':'')+(group?'is-group ':'')+(divider?'is-divider ':'')+(item.url?'has-link ':'')+(item.pinnedAt?'is-pinned ':'')+(dragging===item.id?'drag-source ':'')+(target?'drop-'+target:'')+(selected.has(item.id)?' is-selected':'')} data-entry-id={item.id} data-depth={depth} style={{'--depth':depth}} onClickCapture={event=>{if(!selectMode||event.target.closest('.group-toggle'))return;event.preventDefault();event.stopPropagation();if(item.type==='todo')toggleSelected(item.id);}} onKeyDownCapture={event=>{if(selectMode&&['Enter',' '].includes(event.key)&&!event.target.closest('.group-toggle')){event.preventDefault();event.stopPropagation();if(item.type==='todo')toggleSelected(item.id);}}} onPointerDown={event=>{if(event.target.closest('button,a,textarea,input,.row-actions,.group-controls,.group-picker'))return;beginDrag(event,item);}} onClick={event=>{if(event.target.closest('button,a,textarea,.entry-body,.row-actions,.group-controls,.group-picker')||editing)return;open(item);}} onContextMenu={event=>{if(selectMode||event.target.closest('textarea'))return;event.preventDefault();setMenu({x:event.clientX, y:event.clientY,item});}}>
+      {target&&<span className="drop-placement-note" aria-hidden="true">{target==='inside'?'缩进为子条目':target==='before'?'同级 · 插到前面':'同级 · 插到整组后面'}</span>}
+      <button className="drag-handle" title="拖动排序；中部缩进，边缘同级插入" aria-label={'拖动 '+titleOf(item)} onPointerDown={event=>{event.stopPropagation();beginDrag(event,item);}}><DotsSixVertical size={14}/></button>
       {editing?editor():<div className="entry-read">
         {!group&&descendants.size>0&&<button className={'group-toggle task-toggle '+(item.collapsed?'collapsed':'')} aria-label={(item.collapsed?'展开':'收起')+descendants.size+' 个子条目'} aria-expanded={!item.collapsed} disabled={pending.has(item.id)} onClick={()=>configureGroup(item,{collapsed:!item.collapsed})}><CaretDown size={13}/></button>}
-        {group?<><button className={'group-toggle '+(item.collapsed?'collapsed':'')} aria-label={item.collapsed?'展开分组':'收起分组'} aria-expanded={!item.collapsed} onClick={()=>configureGroup(item,{collapsed:!item.collapsed})}><CaretDown size={15}/></button><button className="group-signature" title="选择分组图标和底色" onClick={()=>setPicker(picker===item.id?'':item.id)}>{item.signature||'🌿'}</button>{picker===item.id&&<div className="group-picker"><div>{['🌿','📌','📝','🚀','💡','🏠','💼'].map(signature=><button key={signature} aria-label={'图标 '+signature} onClick={()=>{configureGroup(item,{signature});setPicker('');}}>{signature}</button>)}</div><div>{['sage','sand','blue','rose','none'].map(tone=><button className={'tone-swatch tone-'+tone} key={tone} aria-label={'底色 '+tone} onClick={()=>{configureGroup(item,{tone});setPicker('');}}/>)}</div></div>}</>:divider?<span className="kind-mark">—</span>:item.type==='todo'?<button className={'checkbox '+(done?'checked':'')} aria-label={done?'重新打开任务':'完成任务'} onClick={()=>updateStatus(item)} disabled={pending.has(item.id)}>{done&&<Check size={11} weight="bold"/>}{removed&&<span>−</span>}</button>:<span className="kind-mark">{item.type==='text'?<TextT size={15}/>:item.type==='link'?<LinkSimple size={15}/>:item.type==='bullet'?<span>•</span>:<ImageSquare size={15}/>}</span>}
-        <div className={'entry-body '+(item.url?'linked-body':'')} title={timeTitle} role="button" tabIndex={0} onClick={event=>{if(event.target.closest('a'))return;open(item);}} onKeyDown={event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();open(item);}}} aria-label={'编辑 '+titleOf(item)}>
-          <EntryContent item={item} items={items}/>
+        {group?<><button className={'group-toggle '+(item.collapsed?'collapsed':'')} aria-label={item.collapsed?'展开分组':'收起分组'} aria-expanded={!item.collapsed} onClick={()=>configureGroup(item,{collapsed:!item.collapsed})}><CaretDown size={15}/></button><button className="group-signature" title="选择分组图标和底色" onClick={()=>setPicker(picker===item.id?'':item.id)}>{item.signature||'🌿'}</button>{picker===item.id&&<div className="group-picker"><div>{['🌿','📌','📝','🚀','💡','🏠','💼'].map(signature=><button key={signature} aria-label={'图标 '+signature} onClick={()=>{configureGroup(item,{signature});setPicker('');}}>{signature}</button>)}</div><div>{['sage','sand','blue','rose','none'].map(tone=><button className={'tone-swatch tone-'+tone} key={tone} aria-label={'底色 '+tone} onClick={()=>{configureGroup(item,{tone});setPicker('');}}/>)}</div></div>}</>:divider?<span className="kind-mark">—</span>:selectMode&&item.type==='todo'?<button className={'selection-check '+(selected.has(item.id)?'checked':'')} role="checkbox" aria-checked={selected.has(item.id)} aria-label={'选择 '+titleOf(item)} disabled={batchBusy}>{selected.has(item.id)&&<Check size={11}/>}</button>:item.type==='todo'?<button className={'checkbox '+(done?'checked':'')} aria-label={done?'重新打开任务':'完成任务'} onClick={()=>updateStatus(item)} disabled={pending.has(item.id)}>{done&&<Check size={11} weight="bold"/>}{removed&&<span>−</span>}</button>:<span className="kind-mark">{item.type==='text'?<TextT size={15}/>:item.type==='link'?<LinkSimple size={15}/>:item.type==='bullet'?<span>•</span>:<ImageSquare size={15}/>}</span>}
+        <div className={'entry-body '+(item.url?'linked-body':'')} title={timeTitle} role="button" tabIndex={0} onClick={event=>{if(event.target.closest('a'))return;open(item);}} onKeyDown={event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();open(item);}}} aria-label={(selectMode?'选择 ':'编辑 ')+titleOf(item)}>
+          <EntryContent item={item} items={items} onLoopHistory={selectMode?undefined:setLoopHistory}/>
         </div>
         {group&&<div className="group-controls"><span className="group-count" title="已完成 / 总任务数（不含取消）">{tasks.filter(task=>task.status==='done').length}/{tasks.length}</span><button title="在分组内写一条" aria-label="在分组内新增条目" onClick={()=>open(null,item.domain,item.id)}><Plus size={14}/></button>
 
@@ -628,8 +689,8 @@ function App(){
     function renderBranch(parentId='',level=0){return rows.filter(({item})=>(item.parentId||'')===parentId||!parentId&&item.parentId&&!items.some(entry=>entry.id===item.parentId&&entry.domain===domain)).map(({item})=>{
       const children=renderBranch(item.id,item.type==='group'?0:level+1);
       const insertion=draft&&!draft.id&&draft.insert?.targetId===item.id?editor():null;
-      if(item.type==='group')return <React.Fragment key={item.id}>{draft?.insert?.placement==='before'&&insertion}<div className={'group-block tone-'+(['sage','sand','blue','rose','none'].includes(item.tone)?item.tone:'sage')} style={{marginLeft:level?18:0}}>{row(item,0)}{!item.collapsed&&<div className="group-children">{children}{draft&&!draft.id&&!draft.insert&&draft.parentId===item.id&&editor()}</div>}</div>{draft?.insert?.placement==='after'&&insertion}</React.Fragment>;
-      return <React.Fragment key={item.id}>{draft?.insert?.placement==='before'&&insertion}{row(item,level)}{!item.collapsed&&children}{!item.collapsed&&draft&&!draft.id&&!draft.insert&&draft.parentId===item.id&&editor()}{draft?.insert?.placement==='after'&&insertion}</React.Fragment>;
+      if(item.type==='group')return <React.Fragment key={item.id}>{draft?.insert?.placement==='before'&&insertion}<div className={'group-block tone-'+(['sage','sand','blue','rose','none'].includes(item.tone)?item.tone:'sage')+(drop?.targetId===item.id&&drop.placement==='after'?' branch-drop-after':'')} style={{marginLeft:level?18:0}}>{row(item,0)}{!item.collapsed&&<div className="group-children">{children}{draft&&!draft.id&&!draft.insert&&draft.parentId===item.id&&editor()}</div>}</div>{draft?.insert?.placement==='after'&&insertion}</React.Fragment>;
+      return <React.Fragment key={item.id}>{draft?.insert?.placement==='before'&&insertion}<div className={'task-branch '+(drop?.targetId===item.id&&drop.placement==='after'?'branch-drop-after':'')}>{row(item,level)}{!item.collapsed&&children}{!item.collapsed&&draft&&!draft.id&&!draft.insert&&draft.parentId===item.id&&editor()}</div>{draft?.insert?.placement==='after'&&insertion}</React.Fragment>;
     });}
     return renderBranch();
   }
@@ -677,10 +738,20 @@ function App(){
   }
   if(authenticated===null||loading)return <div className="auth-screen"><div className="auth-brand"><img className="auth-cat" src="/rafa-cat.png" alt=""/><div className="auth-mark">Rafa<span>todo</span><i/></div></div><span className="auth-loading">正在打开…</span><ErrorNotice message={error} retry={retryAction} onClose={()=>setError('')}/></div>;
   if(!authenticated)return <div className="auth-screen"><form className="auth-form" onSubmit={login}><div className="auth-brand"><img className="auth-cat" src="/rafa-cat.png" alt=""/><div className="auth-mark">Rafa<span>todo</span><i/></div></div><div className="auth-input"><input id="password" type="password" autoFocus autoComplete="current-password" value={password} onChange={event=>setPassword(event.target.value)} aria-label="密码" placeholder="••••••" onKeyDown={event=>{if(event.key==='Enter')login(event);}}/></div></form><ErrorNotice message={error} retry={retryAction} onClose={()=>setError('')}/></div>;
-  return <div className="app">
-    <header className="topbar"><a className="brand" href="/" aria-label="RafaTodo 首页"><img className="brand-cat" src="/rafa-cat.png" alt=""/>Rafa<span>todo</span><i/></a><div className="top-tools"><button className="archive-view" onClick={openArchive} aria-label="查看归档" title="查看归档"><Archive size={18}/></button><button className={'heatmap-trigger '+(heatmapOpen?'active':'')} onClick={()=>setHeatmapOpen(value=>!value)} aria-label="打开活动热力图" title="活动热力图"><ChartBar size={18}/></button></div><Heatmap items={items} open={heatmapOpen} onClose={()=>setHeatmapOpen(false)}/><ArchiveModal open={archiveOpen} items={archived} onClose={()=>setArchiveOpen(false)}/></header>
+  return <div className={'app '+(selectMode?'is-selecting':'')}>
+    <header className="topbar"><a className="brand" href="/" aria-label="RafaTodo 首页"><img className="brand-cat" src="/rafa-cat.png" alt=""/>Rafa<span>todo</span><i/></a><div className="top-tools"><button className={'select-mode-trigger '+(selectMode?'active':'')} aria-pressed={selectMode} disabled={batchBusy||pasteBusy||pending.size>0} onClick={toggleSelectMode}>{selectMode?'退出多选':'多选'}</button><button className="archive-view" onClick={openArchive} aria-label="查看归档" title="查看归档"><Archive size={18}/></button><button className={'heatmap-trigger '+(heatmapOpen?'active':'')} onClick={()=>setHeatmapOpen(value=>!value)} aria-label="打开活动热力图" title="活动热力图"><ChartBar size={18}/></button></div><Heatmap items={items} open={heatmapOpen} onClose={()=>setHeatmapOpen(false)} onLoopHistory={setLoopHistory}/><ArchiveModal open={archiveOpen} items={archived} onClose={()=>setArchiveOpen(false)} onLoopHistory={setLoopHistory}/></header>
     <ErrorNotice message={error} retry={retryAction} onClose={()=>setError('')}/>
     <main ref={board} className="board" data-side-layout={rightLayout} style={{'--work':layout.work+'%','--daily':layout.daily+'%','--life':layout.life+'%','--glean':Math.max(10,100-layout.total)+'%'}}><div className="side-board">{domains.filter(domain=>domain!=='Work').map(columnSection)}</div>{columnSection('Work')}{divider('work')}{divider('daily')}{divider('life')}</main>
+    {selectMode&&<SelectionBar count={selected.size} busy={batchBusy} destination={batchDestination} onDestination={setBatchDestination} onAction={action=>{setError('');setBatchReview(action);}} onClear={()=>setSelected(new Set())} onSelectVisible={selectVisibleTasks} onExit={toggleSelectMode}/>}
+    {batchReview&&<TaskDialog title={batchReview==='move'?'确认批量移动':batchReview==='done'?'确认批量完成':'确认批量取消'} busy={batchBusy} onClose={()=>setBatchReview('')}>
+      <div className="task-dialog-body">{error&&<p className="dialog-error" role="alert">{error}</p>}<p>已选择 {selected.size} 个任务。</p>{batchReview==='move'?<p className="dialog-hint">移到 {batchDestination==='Work:left'?'WORK 左栏':batchDestination==='Work:right'?'WORK 右栏':batchDestination} 末尾。包含子条目共 {selectedSubtrees(items,[...selected]).affected.size} 项，保留层级；同时选中的父子任务不会重复移动。</p>:<p className="dialog-hint">仅{batchReview==='done'?'完成':'取消'}选中的任务，不改变未选中子任务的状态。循环任务沿用原有计数规则。</p>}<p className="dialog-hint">全部成功后生效，失败不会只处理一部分。</p></div>
+      <footer className="task-dialog-actions"><button disabled={batchBusy} onClick={()=>setBatchReview('')}>返回选择</button><button className="dialog-primary" disabled={batchBusy||!selected.size} onClick={runBatch}>{batchBusy?'处理中…':'确认'+(batchReview==='move'?'移动':batchReview==='done'?'完成':'取消任务')}</button></footer>
+    </TaskDialog>}
+    {loopHistory&&<LoopHistoryDialog key={loopHistory.id} item={loopHistory} onClose={()=>setLoopHistory(null)}/>}
+    {pasteChoice&&<TaskDialog title="粘贴多行内容" busy={pasteBusy} onClose={()=>setPasteChoice(null)} onAfterClose={pasteChoice.focus}>
+      <div className="task-dialog-body">{error&&<p className="dialog-error" role="alert">{error}</p>}<p>保留在一个条目中，还是将编辑框内容按非空行拆分？</p><pre className="paste-preview">{pasteChoice.text}</pre><p className="dialog-hint">共 {pastedLines(pasteChoice.text).length} 条。{draft?.id?'第一条保留原任务及其子任务，其余紧随其后。':'保留当前栏目、左右栏和缩进位置。'} 拆分后各行按原有输入语法识别。</p>{pastedLines(pasteChoice.text).length>200&&<p className="dialog-error">一次最多拆分 200 条，请保留为一条或分批粘贴。</p>}</div>
+      <footer className="task-dialog-actions"><button disabled={pasteBusy} onClick={()=>setPasteChoice(null)}>取消粘贴</button><button disabled={pasteBusy} onClick={()=>{pasteChoice.applySingle();setPasteChoice(null);}}>保留一条</button><button className="dialog-primary" disabled={pasteBusy||pastedLines(pasteChoice.text).length>200} onClick={splitPaste}>{pasteBusy?'拆分中…':'按行拆分'}</button></footer>
+    </TaskDialog>}
     {inboxOpen&&<InboxDialog onClose={()=>setInboxOpen(false)}>
       <div className="inbox-drafts-head"><strong>AI 草稿 <span>{inboxBatches.reduce((sum,batch)=>sum+batch.drafts.filter(draft=>draft.decision==='pending').length,0)} 待处理</span></strong><button autoFocus onClick={()=>setInboxOpen(false)} aria-label="关闭 AI 草稿"><X size={18}/></button></div>
       <div className="inbox-drafts-list">{inboxBatches.length?inboxBatches.map(batch=><section className="inbox-batch" key={batch.id}>
@@ -693,7 +764,7 @@ function App(){
       <div className="inbox-drafts-foot"><span>逐条采纳，即刻加入对应栏目。</span>{inboxBatches.length>0&&inboxBatches.every(batch=>batch.drafts.every(draft=>draft.decision!=='pending'))&&<button onClick={clearInbox}>清空原文与已处理批次</button>}</div>
     </InboxDialog>}
     {zen&&(()=>{const root=items.find(item=>item.id===zen.id);if(!root)return null;const rows=zenTree(root);return <div className="zen-screen" role="dialog" aria-modal="true" aria-label="ZEN 专注模式"><div className="zen-atmosphere" aria-hidden="true"><i/><i/><i/><i/></div><div className="zen-content"><div className="zen-label">ZEN <span>{root.domain.toUpperCase()}</span></div><div className="zen-timer" aria-live="off">{zenClock(zenNow-zen.startedAt)}</div><div className="zen-tree">{rows.map(({item,depth})=><article className={'zen-task '+(item.status==='done'?'is-done':'')} key={item.id} style={{'--zen-depth':depth}}><div className="zen-task-line"><span className="zen-mark">{item.status==='done'?'✓':item.type==='group'?'◇':'·'}</span><div className="zen-task-body"><h1>{inline(titleOf(item))}</h1>{item.content&&<p>{zenDescription(item.content)}</p>}{item.image&&<img className="zen-main-image" src={item.image} alt={item.title||'任务图片'}/>}</div></div>{zenMetadata(item).length>0&&<div className="zen-meta">{zenMetadata(item).map((value,index)=><span key={index}>{value}</span>)}</div>}{item.url&&<a href={item.url} target="_blank" rel="noreferrer">{item.url}</a>}</article>)}</div><div className="zen-actions">{zenConfirm==='hold'?<><button onClick={()=>setZenConfirm('')} disabled={pending.has('zen')}>取消</button><button className="zen-hold confirming" onClick={()=>finishZen('hold')} disabled={pending.has('zen')}>确认搁置？</button></>:<><button className={'zen-done '+(zenConfirm==='done'?'confirming':'')} onClick={()=>finishZen('done')} disabled={pending.has('zen')}>{zenConfirm==='done'?'确认完成？':<><Check size={16}/>完成</>}</button>{zenConfirm==='done'?<button onClick={()=>setZenConfirm('')} disabled={pending.has('zen')}>取消</button>:<button className="zen-hold" onClick={()=>finishZen('hold')} disabled={pending.has('zen')}>搁置</button>}</>}</div></div></div>})()}
-    {dragging&&<div className="drag-caption">{drop?.placement==='inside'?'成为子条目':drop?.placement==='end'?(drop.domain==='Work'?'移到'+(drop.workPane==='right'?'右栏':'左栏')+'末尾':'移到 '+drop.domain+' 末尾'):drop?'移动到这里':'拖到目标位置'}</div>}
+    {dragging&&<div className="drag-caption" role="status">{drop?.placement==='inside'?'成为「'+titleOf(byId.get(drop.targetId))+'」的子条目':drop?.placement==='end'?(drop.domain==='Work'?'移到 WORK '+(drop.workPane==='right'?'右栏':'左栏')+'末尾':'移到 '+drop.domain+' 末尾'):drop?'插到「'+titleOf(byId.get(drop.targetId))+'」'+(drop.placement==='before'?'之前':'之后')+'（同级）':'此处不可放置'} · Esc 取消</div>}
     {menu&&<div className={'context-menu '+(menu.kind==='row'?'row-menu':'')} role="menu" style={{left:Math.max(8,Math.min(menu.x,window.innerWidth-190)),top:Math.min(menu.y,window.innerHeight-(menu.kind==='row'?270:220))}} onPointerDown={event=>event.stopPropagation()} onKeyDown={event=>{if(event.key==='Escape'){event.preventDefault();setMenu(null);}}}>
       {menu.kind==='row'?<>
         {menu.item.type!=='divider'&&<button role="menuitem" disabled={pending.has(menu.item.id)} onClick={()=>startZen(menu.item)}>ZEN 专注</button>}

@@ -2,8 +2,11 @@
 
 ## Required GitHub Push
 
-- After every completed change to this project, run the relevant checks, commit
-  the intended changes, and push to GitHub before starting another change.
+- Treat each user request as one complete task, even when it contains multiple
+  features, fixes, or subtasks. Finish all requested items and run the relevant
+  checks before committing the intended changes together and pushing once.
+- Do not commit or push after individual subtasks. Do not begin a new user task
+  while the completed task still needs its required push.
 - This applies to code, styles, documentation, configuration, and these rules.
 - Do not leave completed changes only in the local working tree or a local commit.
 - If a push fails or times out, stop immediately. Do not make further changes,
