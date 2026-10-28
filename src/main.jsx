@@ -80,6 +80,10 @@ function ErrorNotice({message,retry,onClose}){
     <button className="toast-close" aria-label="关闭提示" title="关闭" onClick={onClose}>×</button>
   </div>;
 }
+function LoopLabel({item}){
+  if(item.type!=='todo'||!['day','week'].includes(item.loop))return null;
+  return <span className={'loop-label loop-'+item.loop}>{item.loop==='day'?'每日':'每周'} | {item.loopCompletedCount||0}次</span>;
+}
 function ArchiveModal({open,items,onClose}){
   if(!open)return null;
   const byId=new Map(items.map(item=>[item.id,item]));
@@ -105,8 +109,8 @@ function ArchiveModal({open,items,onClose}){
   return <div className="archive-backdrop" onPointerDown={onClose}><div className="archive-modal" role="dialog" aria-label="归档内容" onPointerDown={event=>event.stopPropagation()}>
     <div className="archive-head"><div><strong>归档</strong><span className="archive-total">{items.length} 条</span></div><button onClick={onClose} aria-label="关闭归档">×</button></div>
     {domains.map(domain=>{const rows=rowsFor(domain);return <section className="archive-section" key={domain}><h2><span className={'archive-domain-dot archive-domain-'+domain.replace(/\W/g,'').toLowerCase()}/>{domain==='Glean & Idea'?'GLEAN & IDEA':domain.toUpperCase()} <span>{rows.length}</span></h2>{rows.length?<div className="archive-list">{rows.map(({item,depth})=><article className="archive-item" key={item.id} style={{'--archive-depth':depth}}>
-      <div className="archive-item-head"><span className={'archive-status archive-status-'+item.status}><i/>{item.status==='done'?'已完成':item.status==='removed'?'已取消':'已归档'}</span><span className="archive-type">{typeName(item)}</span>{item.type==='todo'&&['day','week'].includes(item.loop)&&<span className="archive-count">该周期完成 · 累计 {item.loopCompletedCount||0} 次</span>}<time title={'归档时间 '+stamp(item.archivedAt)}>{stamp(archiveTime(item))}</time></div>
-      <div className="archive-title">{item.type==='todo'&&['day','week'].includes(item.loop)&&<span className={'loop-label loop-'+item.loop}>{item.loop==='day'?'每日':'每周'}</span>}{item.prefixLabel&&<span className="prefix-label">{item.prefixLabel}</span>}{inline(titleOf(item))}</div>
+      <div className="archive-item-head"><span className={'archive-status archive-status-'+item.status}><i/>{item.status==='done'?'已完成':item.status==='removed'?'已取消':'已归档'}</span><span className="archive-type">{typeName(item)}</span><time title={'归档时间 '+stamp(item.archivedAt)}>{stamp(archiveTime(item))}</time></div>
+      <div className="archive-title"><LoopLabel item={item}/>{item.prefixLabel&&<span className="prefix-label">{item.prefixLabel}</span>}{inline(titleOf(item))}</div>
       {item.content&&<p className="archive-note">{inline(item.content)}</p>}
       {item.image&&<img className="archive-image" src={item.image} alt={item.title||'归档图片'}/>}
       {item.url&&<a className="archive-link" href={item.url} target="_blank" rel="noreferrer">{item.url}</a>}
@@ -145,11 +149,10 @@ function Heatmap({items,open,onClose}){
 function EntryContent({item,items=[]}) {
   const divider=item.type==='divider',done=item.status==='done',removed=item.status==='removed';
   const overdue=item.type==='todo'&&item.dueDate&&item.dueDate<new Date().toLocaleDateString('en-CA')&&!done&&!removed;
-  const loop=item.type==='todo'&&['day','week'].includes(item.loop)?item.loop:'';
   const statusDate=removed?item.removedAt:done?item.completedAt:null;
   const statusCaption=statusDate?new Date(statusDate).toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'})+(removed?'取消':'完成'):'';
   return <>
-          <span className="entry-title">{divider?<span className="md-rule"/>:<>{loop&&<span className={'loop-label loop-'+loop}>{loop==='day'?'每日':'每周'}</span>}{item.prefixLabel&&<span className="prefix-label">{item.prefixLabel}</span>}{inline(titleOf(item))}</>}</span>
+          <span className="entry-title">{divider?<span className="md-rule"/>:<><LoopLabel item={item}/>{item.prefixLabel&&<span className="prefix-label">{item.prefixLabel}</span>}{inline(titleOf(item))}</>}</span>
           {item.content&&item.title&&<span className="entry-note">{item.content.split('\n').map((line,index)=><span className="note-line" key={index}>{inline(line)}</span>)}</span>}
           {item.image&&<img className="thumb" src={item.image} alt={item.title||'条目图片'}/>}
           <span className="entry-meta">
@@ -160,7 +163,6 @@ function EntryContent({item,items=[]}) {
             {item.dueDate&&<span className={overdue?'overdue':'date'}>↗ {item.dueDate}</span>}
             {item.status==='waiting'&&<span>等待中</span>}{item.status==='doing'&&<span>进行中</span>}
             {item.stage&&<span>{item.stage}</span>}
-            {loop&&<span className={'loop-count loop-count-'+loop}>{item.loopCompletedCount||0} 次</span>}
             {item.planDate&&<span>计划 {item.planDate}</span>}{item.followupDate&&<span>跟进 {item.followupDate}</span>}
             {Object.entries(item.custom||{}).filter(([,value])=>value).map(([key,value])=><span key={key}>{key} · {value}</span>)}
             {(item.dependencies||[]).map(id=><span key={id} className="relation">← {items.find(entry=>entry.id===id)?.title||'前置任务'}</span>)}

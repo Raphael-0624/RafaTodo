@@ -83,10 +83,9 @@ button:focus-visible,a:focus-visible,[role="button"]:focus-visible,textarea:focu
 .entry-title{font-size:14px;line-height:21px;letter-spacing:.01em;white-space:pre-wrap;overflow-wrap:anywhere}
 .prefix-label,.loop-label{display:inline-flex;align-items:center;height:17px;margin-right:6px;padding:0 6px;font-size:10px;font-weight:650;line-height:1;vertical-align:middle;white-space:nowrap}
 .prefix-label{border:1px solid #d7cda6;border-radius:999px;background:#f6efd6;color:#806b2e;letter-spacing:.02em}
-.loop-label{gap:3px;padding:0 7px;border:1px solid #b8d3d0;border-radius:4px;background:#eaf5f3;color:#31706c;font-weight:700;letter-spacing:.04em}
+.loop-label{gap:3px;padding:0 7px;border:1px solid #b8d3d0;border-radius:4px;background:#eaf5f3;color:#31706c;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:.04em}
 .loop-label::before{content:'';width:4px;height:4px;border-radius:50%;background:currentColor}
 .loop-label.loop-week{border-color:#c6cbe0;background:#f0f1f9;color:#555f94}
-.entry-meta .loop-count{color:#407a74;font-variant-numeric:tabular-nums}.entry-meta .loop-count.loop-count-week{color:#606a9a}
 .entry-note{font-size:12px;line-height:1.45;color:#8e978a;white-space:pre-wrap;overflow-wrap:anywhere}
 .entry-meta{display:flex;align-items:baseline;gap:2px 7px;flex-wrap:wrap;color:#9ca593;font-size:10px;line-height:1.5}
 .entry-meta:empty{display:none}
@@ -265,7 +264,6 @@ button:focus-visible,a:focus-visible,[role="button"]:focus-visible,textarea:focu
 .archive-status{display:inline-flex;align-items:center;gap:4px;padding:1px 6px;border-radius:3px;background:#eef3ec;color:#71816e;font-size:9px;white-space:nowrap}
 .archive-status i{width:5px;height:5px;border-radius:50%;background:currentColor}.archive-status-done{background:#e8f2e7;color:#4c7c52}.archive-status-removed{background:#f4ece8;color:#a27060}
 .archive-type{padding:1px 5px;border:1px solid #e2e7df;border-radius:3px;color:#8b9786;font-size:9px}.archive-item-head time{margin-left:auto;color:#a1aaa0;font-size:9px;white-space:nowrap}
-.archive-count{color:#4d7d78;font-size:9px;font-weight:650;font-variant-numeric:tabular-nums}
 .archive-title{margin-top:7px;color:#3d4b3a;white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere;line-height:1.55;font-size:12px}
 .archive-note{margin:5px 0 0;color:#7c8978;font-size:10px;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere}
 .archive-image{display:block;max-width:100%;max-height:180px;margin-top:7px;border-radius:3px;object-fit:contain;border:1px solid #e6eae2}
