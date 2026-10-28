@@ -214,6 +214,7 @@ button:focus-visible,a:focus-visible,[role="button"]:focus-visible,textarea:focu
 .is-group .entry-title{font-weight:650;font-size:15px;color:#384534}
 .group-toggle{width:15px;height:19px;flex:0 0 15px;padding:0;display:grid;place-items:center;color:#8c9984}
 .group-toggle svg{transition:transform 160ms ease}.group-toggle.collapsed svg{transform:rotate(-90deg)}
+.task-toggle{width:14px;flex-basis:14px;margin-right:-6px;border-radius:3px}.task-toggle:hover{background:#e3eadd;color:#438865}
 .group-controls{display:flex;align-items:center;gap:5px;position:relative;flex:0 0 auto;font-size:11px;color:#8b9783}
 .group-controls>button{padding:2px;display:grid;place-items:center;min-width:18px;height:21px}
 .group-count{font-size:10px;font-variant-numeric:tabular-nums;white-space:nowrap}

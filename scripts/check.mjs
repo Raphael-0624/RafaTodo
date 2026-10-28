@@ -213,6 +213,13 @@ try{
   const prefixed=(await request('POST','/api/entries',{domain:'Work',type:'todo',status:'open',title:'登录页重做',content:'',prefixLabel:'需求',workPane:'left'})).data;
   assert.equal(prefixed.prefixLabel,'需求');
 
+  const folded=(await request('PUT','/api/entries/'+leftParent.id,{...leftParent,collapsed:true})).data;
+  assert.equal(folded.collapsed,true);
+  entries=(await request('GET','/api/entries')).data;
+  assert.equal(entries.find(entry=>entry.id===leftParent.id).collapsed,true);
+  assert.equal(entries.filter(entry=>entry.parentId===leftParent.id).length,2);
+  assert.equal((await request('PUT','/api/entries/'+leftParent.id,{...folded,collapsed:false})).data.collapsed,false);
+
   // DAILY is a normal column now. LOOP tasks only count explicit completions,
   // and the same completion is idempotent within a period.
   assert.equal(domains.includes('Daily'),true);

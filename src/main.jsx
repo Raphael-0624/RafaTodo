@@ -429,6 +429,8 @@ function App(){
     if(suppressClick.current)return;
     if(draft&&(item?.id===draft.id&&item?.id||!item&&!draft.id&&draft.domain===domain&&(!pane||(draft.workPane||'left')===pane))){document.querySelector('.write-input textarea')?.focus();return;}
     if(draft&&!await save())return;
+    const parent=itemsRef.current.find(entry=>entry.id===parentId);
+    if(parent?.collapsed){try{replaceItem(await api('/api/entries/'+parent.id,'PUT',{...parent,collapsed:false}));}catch(error){setError(error.message);return;}}
     const value=item||{domain,title:'',content:'',type:'todo',status:'open',parentId,workPane:domain==='Work'?pane||'left':''};
     const seed=item?editLine(item,items):'';editorTextRef.current=seed;setDraft({...value,editorSeed:seed,editorKey:newId()});setError('');
   }
@@ -605,6 +607,7 @@ function App(){
     return <div key={item.id} className={'entry '+(done?'is-done ':'')+(removed?'is-removed ':'')+(group?'is-group ':'')+(divider?'is-divider ':'')+(item.url?'has-link ':'')+(item.pinnedAt?'is-pinned ':'')+(dragging===item.id?'drag-source ':'')+(target?'drop-'+target:'')} data-entry-id={item.id} data-depth={depth} style={{'--depth':depth}} onPointerDown={event=>{if(event.target.closest('button,a,textarea,input,.row-actions,.group-controls,.group-picker'))return;beginDrag(event,item);}} onClick={event=>{if(event.target.closest('button,a,textarea,.entry-body,.row-actions,.group-controls,.group-picker')||editing)return;open(item);}} onContextMenu={event=>{if(event.target.closest('textarea'))return;event.preventDefault();setMenu({x:event.clientX, y:event.clientY,item});}}>
       <button className="drag-handle" title="拖动排序；放在文字中间成为子条目" aria-label={'拖动 '+titleOf(item)} onPointerDown={event=>{event.stopPropagation();beginDrag(event,item);}}><DotsSixVertical size={14}/></button>
       {editing?editor():<div className="entry-read">
+        {!group&&descendants.size>0&&<button className={'group-toggle task-toggle '+(item.collapsed?'collapsed':'')} aria-label={(item.collapsed?'展开':'收起')+descendants.size+' 个子条目'} aria-expanded={!item.collapsed} disabled={pending.has(item.id)} onClick={()=>configureGroup(item,{collapsed:!item.collapsed})}><CaretDown size={13}/></button>}
         {group?<><button className={'group-toggle '+(item.collapsed?'collapsed':'')} aria-label={item.collapsed?'展开分组':'收起分组'} aria-expanded={!item.collapsed} onClick={()=>configureGroup(item,{collapsed:!item.collapsed})}><CaretDown size={15}/></button><button className="group-signature" title="选择分组图标和底色" onClick={()=>setPicker(picker===item.id?'':item.id)}>{item.signature||'🌿'}</button>{picker===item.id&&<div className="group-picker"><div>{['🌿','📌','📝','🚀','💡','🏠','💼'].map(signature=><button key={signature} aria-label={'图标 '+signature} onClick={()=>{configureGroup(item,{signature});setPicker('');}}>{signature}</button>)}</div><div>{['sage','sand','blue','rose','none'].map(tone=><button className={'tone-swatch tone-'+tone} key={tone} aria-label={'底色 '+tone} onClick={()=>{configureGroup(item,{tone});setPicker('');}}/>)}</div></div>}</>:divider?<span className="kind-mark">—</span>:item.type==='todo'?<button className={'checkbox '+(done?'checked':'')} aria-label={done?'重新打开任务':'完成任务'} onClick={()=>updateStatus(item)} disabled={pending.has(item.id)}>{done&&<Check size={11} weight="bold"/>}{removed&&<span>−</span>}</button>:<span className="kind-mark">{item.type==='text'?<TextT size={15}/>:item.type==='link'?<LinkSimple size={15}/>:item.type==='bullet'?<span>•</span>:<ImageSquare size={15}/>}</span>}
         <div className={'entry-body '+(item.url?'linked-body':'')} title={timeTitle} role="button" tabIndex={0} onClick={event=>{if(event.target.closest('a'))return;open(item);}} onKeyDown={event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();open(item);}}} aria-label={'编辑 '+titleOf(item)}>
           <EntryContent item={item} items={items}/>
@@ -626,7 +629,7 @@ function App(){
       const children=renderBranch(item.id,item.type==='group'?0:level+1);
       const insertion=draft&&!draft.id&&draft.insert?.targetId===item.id?editor():null;
       if(item.type==='group')return <React.Fragment key={item.id}>{draft?.insert?.placement==='before'&&insertion}<div className={'group-block tone-'+(['sage','sand','blue','rose','none'].includes(item.tone)?item.tone:'sage')} style={{marginLeft:level?18:0}}>{row(item,0)}{!item.collapsed&&<div className="group-children">{children}{draft&&!draft.id&&!draft.insert&&draft.parentId===item.id&&editor()}</div>}</div>{draft?.insert?.placement==='after'&&insertion}</React.Fragment>;
-      return <React.Fragment key={item.id}>{draft?.insert?.placement==='before'&&insertion}{row(item,level)}{children}{draft&&!draft.id&&!draft.insert&&draft.parentId===item.id&&editor()}{draft?.insert?.placement==='after'&&insertion}</React.Fragment>;
+      return <React.Fragment key={item.id}>{draft?.insert?.placement==='before'&&insertion}{row(item,level)}{!item.collapsed&&children}{!item.collapsed&&draft&&!draft.id&&!draft.insert&&draft.parentId===item.id&&editor()}{draft?.insert?.placement==='after'&&insertion}</React.Fragment>;
     });}
     return renderBranch();
   }
