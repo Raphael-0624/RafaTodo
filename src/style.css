@@ -137,6 +137,15 @@ button:focus-visible,a:focus-visible,[role="button"]:focus-visible,textarea:focu
 .is-removed .entry-read{opacity:.42}
 .is-removed .entry-title{text-decoration:line-through}
 .thumb{max-width:100%;width:auto;max-height:155px;object-fit:contain;border-radius:3px;margin:7px 0 3px}
+img[role="button"]{cursor:zoom-in}
+img[role="button"]:focus-visible{outline:2px solid #438865;outline-offset:3px}
+.image-viewer{position:fixed;inset:0;margin:0;width:100vw;height:100vh;height:100dvh;max-width:none;max-height:none;padding:32px;border:0;background:#101511ed;color:#fff;overflow:hidden;cursor:zoom-out}
+.image-viewer[open]{display:flex;align-items:center;justify-content:center}
+.image-viewer::backdrop{background:#101511ed}
+.image-viewer-image{display:block;max-width:100%;max-height:100%;object-fit:contain;cursor:default}
+.image-viewer-close{position:absolute;top:max(12px,env(safe-area-inset-top));right:max(12px,env(safe-area-inset-right));z-index:1;width:44px;height:44px;display:grid;place-items:center;padding:0;border:1px solid #ffffff40;border-radius:50%;background:#101511b3;color:#fff;font-size:30px;line-height:1;cursor:pointer}
+.image-viewer-close:hover{background:#ffffff26}
+@media(max-width:720px){.image-viewer{padding:64px 12px 24px}}
 .open-link{flex:0 0 auto;margin-top:4px;padding:1px;color:#a1ad97}
 .open-link:hover{color:#438865}
 .linked-body .entry-title{color:#3f7659;text-decoration:underline;text-decoration-color:#b6d0bd;text-underline-offset:3px}

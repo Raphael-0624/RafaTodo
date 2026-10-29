@@ -552,13 +552,24 @@ app.post('/api/archive', (req, res) => {
       if (eligible.has(item.id)) return eligible.get(item.id);
       if (visiting.has(item.id)) return false;
       visiting.add(item.id);
-      const allowed = Boolean(item.archivedAt || (['done', 'removed'].includes(item.status) && item.domain === domain && (children.get(item.id) || []).every(child => canArchive(child, visiting))));
+      const finished = item.type !== 'todo' || ['done', 'removed'].includes(item.status);
+      const allowed = Boolean(item.archivedAt || (finished && item.domain === domain && (children.get(item.id) || []).every(child => canArchive(child, visiting))));
       visiting.delete(item.id);
       eligible.set(item.id, allowed);
       return allowed;
     }
+    const archiveIds = new Set();
+    function includeSubtree(item) {
+      if (archiveIds.has(item.id) || item.archivedAt) return;
+      archiveIds.add(item.id);
+      for (const child of children.get(item.id) || []) includeSubtree(child);
+    }
+    // Open notes are eligible as descendants, not independent archive targets.
     for (const item of items) {
-      if (item.archivedAt || !canArchive(item)) continue;
+      if (!item.archivedAt && ['done', 'removed'].includes(item.status) && canArchive(item)) includeSubtree(item);
+    }
+    for (const item of items) {
+      if (!archiveIds.has(item.id)) continue;
       item.archivedAt = now;
       item.updatedAt = now;
       db.prepare('UPDATE entries SET data=? WHERE id=?').run(JSON.stringify(item), item.id);

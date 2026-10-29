@@ -352,12 +352,29 @@ try{
       }
     }
     const ordinary=(await request('POST','/api/entries',{...placement,domain,type:'todo',status:'done',title:'Ordinary completed task',content:''})).data;
+    const create=async(type,title,parentId='',status='open')=>{
+      const result=await request('POST','/api/entries',{...placement,domain,type,title,parentId,status,content:''});
+      assert.equal(result.status,200);return result.data;
+    };
+    const attachments=[];
+    for(const type of ['text','link','image','group','bullet','divider'])attachments.push(await create(type,'Non-task '+type,ordinary.id));
+    attachments.push(await create('text','Nested note',attachments[3].id));
+    attachments.push(await create('todo','Cancelled child',attachments[3].id,'removed'));
+    const standalone=await create('text','Keep standalone note');
+    const openParent=await create('todo','Completed parent with nested open task','','done');
+    const openWrapper=await create('text','Wrapper around unfinished task',openParent.id);
+    const openGrandchild=await create('todo','Unfinished grandchild',openWrapper.id);
+    const recurringWrapper=await create('text','Wrapper around recurring task',parent.id);
+    const nestedLoop=(await request('POST','/api/entries',{...placement,domain,type:'todo',title:'Nested weekly',content:'',status:'done',loop:'week',parentId:recurringWrapper.id})).data;
+    recurring.push(nestedLoop);
     const activityBefore=await activityFor(domain);
     const result=await request('POST','/api/archive',{domain});
     assert.equal(result.status,200);
     const visible=new Map(result.data.items.map(item=>[item.id,item]));
     assert.ok(visible.has(parent.id));
     assert.ok(!visible.has(ordinary.id));
+    for(const attachment of attachments)assert.ok(!visible.has(attachment.id),'Non-task descendants archive with their completed parent');
+    for(const item of [standalone,openParent,openWrapper,openGrandchild,recurringWrapper])assert.ok(visible.has(item.id),'Open or protected subtrees stay visible');
     for(const item of recurring){
       assert.ok(visible.has(item.id),'Archive must retain '+domain+' '+item.loop+' '+item.status);
       const retained=visible.get(item.id);
@@ -370,6 +387,12 @@ try{
     }
     const archived=(await request('GET','/api/archive')).data;
     assert.ok(archived.some(item=>item.id===ordinary.id));
+    for(const attachment of attachments){
+      const stored=archived.find(item=>item.id===attachment.id);
+      assert.ok(stored?.archivedAt);
+      assert.equal(stored.status,attachment.status,'Archiving does not rewrite non-task status');
+      assert.equal(stored.parentId,attachment.parentId);
+    }
     assert.ok(!archived.some(item=>item.id===parent.id||recurring.some(loop=>loop.id===item.id)));
     assertContiguousPositions(result.data.items);
     assert.deepEqual(await activityFor(domain),activityBefore);

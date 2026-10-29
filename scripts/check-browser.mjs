@@ -225,8 +225,65 @@ try{
   await click('.work-pinned-list .pinned-unpin');
   await until('!document.querySelector(".work-pinned-list")','Unpin removes the empty top area');
   await until(`fetch('/api/entries').then(response=>response.json()).then(items=>!items.find(item=>item.id===${JSON.stringify(ids.child)}).pinnedAt)`,'Unpin saved');
+
+  const {data:imageData}=await send('Page.captureScreenshot',{format:'png'});
+  const imageIds=await evaluate(`(async()=>{
+    const post=async(url,body)=>{const response=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const data=await response.json();if(!response.ok)throw Error(data.error);return data;};
+    const {url}=await post('/api/upload',{mime:'image/png',base64:${JSON.stringify(imageData)}});
+    const image=await post('/api/entries',{domain:'Work',workPane:'third',type:'image',title:'Preview image',content:'![Inline preview]('+url+')',image:url});
+    const archived=await post('/api/entries',{domain:'Life',type:'image',title:'Archived preview image',content:'',image:url,status:'done'});
+    await post('/api/archive',{domain:'Life'});
+    return {image:image.id,archived:archived.id,url};
+  })()`);
+  await send('Page.reload');await until(`!!document.querySelector(${JSON.stringify(row(imageIds.image)+' .thumb')})`);
+  const imageSelector=row(imageIds.image)+' .thumb';
+  async function openImage(selector){
+    const point=await evaluate(`(()=>{const node=document.querySelector(${JSON.stringify(selector)});node.scrollIntoView({block:'center',behavior:'instant'});const r=node.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);
+    await send('Input.dispatchMouseEvent',{type:'mousePressed',...point,button:'left',clickCount:1});
+    await send('Input.dispatchMouseEvent',{type:'mouseReleased',...point,button:'left',clickCount:1});
+    await until('!!document.querySelector(".image-viewer[open]")','Image opens without editing');
+    await until('document.querySelector(".image-viewer-image").naturalWidth>0','Full image loaded');
+    assert.equal(await evaluate('!!document.querySelector(".write-row,.drag-caption")'),false,'Image click does not edit or drag');
+    assert.equal(await evaluate('document.querySelector(".image-viewer-image").getAttribute("src")'),imageIds.url);
+    assert.ok(await evaluate(`(()=>{const r=document.querySelector('.image-viewer').getBoundingClientRect();return r.x===0&&r.y===0&&Math.abs(r.width-innerWidth)<1&&Math.abs(r.height-innerHeight)<1;})()`),'Fullscreen overlay');
+  }
+  await openImage(imageSelector);
+  await click('.image-viewer-image');
+  assert.equal(await evaluate('!!document.querySelector(".image-viewer[open]")'),true,'Clicking the picture keeps it open');
+  await click('.image-viewer-close');await until('!document.querySelector(".image-viewer")');
+  assert.equal(await evaluate(`document.activeElement.matches(${JSON.stringify(imageSelector)})`),true,'Close restores image focus');
+  await openImage(imageSelector);
+  await send('Input.dispatchMouseEvent',{type:'mousePressed',x:5,y:300,button:'left',clickCount:1});
+  await send('Input.dispatchMouseEvent',{type:'mouseReleased',x:5,y:300,button:'left',clickCount:1});
+  await until('!document.querySelector(".image-viewer")','Blank area closes preview');
+  await send('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter'});
+  await until('!!document.querySelector(".image-viewer[open]")','Keyboard opens image');
+  await send('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape'});
+  await until('!document.querySelector(".image-viewer")','Escape closes preview');
+  await send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
+  await openImage(imageSelector);await screenshot('mobile-image-preview');
+  assert.ok(await evaluate(`(()=>{const r=document.querySelector('.image-viewer-image').getBoundingClientRect();return r.x>=0&&r.y>=0&&r.right<=innerWidth&&r.bottom<=innerHeight;})()`),'Large image fits mobile viewport');
+  await click('.image-viewer-close');
+  await click('.archive-view');
+  await until('!!document.querySelector(".archive-image")');
+  await evaluate(`Promise.all(document.querySelector('.archive-modal').getAnimations().map(animation=>animation.finished))`);
+  await openImage('.archive-image');
+  await click('.image-viewer-close');
+  assert.equal(await evaluate('!!document.querySelector(".archive-modal")'),true,'Closing image keeps archive open');
+  await click('[aria-label="关闭归档"]');
+  await click(row(imageIds.image)+' .row-menu-trigger');
+  await until('!!document.querySelector(".context-menu")');
+  await evaluate(`Array.from(document.querySelectorAll('.context-menu button')).find(node=>node.textContent==='ZEN 专注').click()`);
+  await until('!!document.querySelector(".zen-main-image")');
+  await evaluate(`Promise.all(document.querySelector('.zen-content').getAnimations().map(animation=>animation.finished))`);
+  await openImage('.zen-main-image');
+  await send('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape'});
+  await until('!document.querySelector(".image-viewer")');
+  assert.equal(await evaluate('!!document.querySelector(".zen-screen")&&!document.querySelector(".zen-actions .confirming")'),true,'Escape closes only the image, not ZEN');
+  await openImage('.zen-task p img');
+  await click('.image-viewer-close');
   assert.deepEqual(errors,[],'Browser runtime errors');
-  console.log('PASS: desktop/mobile layout, divider dragging and persistence, third pane creation, INBOX autosizing, collapse, loop records, multiline paste and drop feedback');
+  console.log('PASS: desktop/mobile layout, pinned area, dividers, scrolling, INBOX, collapse, loop records, paste, drop feedback and fullscreen image preview');
 }finally{
   ws?.close();
   for(const child of [browser,app])if(child&&child.exitCode===null){const exited=new Promise(resolve=>child.once('exit',resolve));child.kill();await Promise.race([exited,pause(3000)]);}
