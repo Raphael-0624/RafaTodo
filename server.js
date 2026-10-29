@@ -5,6 +5,7 @@ import { randomUUID, randomBytes, scryptSync, timingSafeEqual } from 'node:crypt
 import path from 'node:path';
 import * as entryUtils from './src/lib/entries.js';
 import {batchMoveEntries,pastedLines} from './src/lib/interactions.js';
+import {focusDuration} from './src/lib/focus.js';
 
 const {domains, moveEntries, nextPosition, loopPeriodKey} = entryUtils;
 const normalizeEntryLayout = typeof entryUtils.normalizeEntryLayout === 'function' ? entryUtils.normalizeEntryLayout : items => items;
@@ -18,6 +19,13 @@ db.exec(`
   PRAGMA journal_mode=WAL;
   CREATE TABLE IF NOT EXISTS entries (id TEXT PRIMARY KEY, data TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS focus_timers (
+    entry_id TEXT PRIMARY KEY,
+    elapsed_ms INTEGER NOT NULL DEFAULT 0,
+    running_since INTEGER,
+    previous_status TEXT NOT NULL DEFAULT 'open'
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS focus_single_running_idx ON focus_timers((1)) WHERE running_since IS NOT NULL;
   CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, expires_at INTEGER NOT NULL);
   CREATE TABLE IF NOT EXISTS daily_items (
     id TEXT PRIMARY KEY,
@@ -505,6 +513,7 @@ app.delete('/api/entries/:id', (req, res) => {
     const linkedIds = db.prepare('SELECT owner_id FROM entry_links WHERE target_id=?').all(deleted.id).map(row => row.owner_id);
     db.prepare('DELETE FROM entries WHERE id=?').run(deleted.id);
     db.prepare('DELETE FROM loop_completions WHERE entry_id=?').run(deleted.id);
+    db.prepare('DELETE FROM focus_timers WHERE entry_id=?').run(deleted.id);
     for (const id of linkedIds) {
       const currentRow = db.prepare('SELECT data FROM entries WHERE id=?').get(id);
       if (!currentRow) continue;
@@ -519,6 +528,74 @@ app.delete('/api/entries/:id', (req, res) => {
   });
   cleanupDeletedUploads(deleted);
   res.json(unarchivedEntries());
+});
+
+function settleFocus(id, now = Date.now()) {
+  db.prepare('UPDATE focus_timers SET elapsed_ms=elapsed_ms+MAX(0,?-running_since),running_since=NULL WHERE entry_id=? AND running_since IS NOT NULL').run(now, id);
+}
+
+function focusState() {
+  const active = db.prepare('SELECT * FROM focus_timers WHERE running_since IS NOT NULL').get();
+  if (active) {
+    const row = db.prepare('SELECT data FROM entries WHERE id=?').get(active.entry_id);
+    const item = row && hydrateLoopEntry(JSON.parse(row.data));
+    if (!item || item.archivedAt || item.status !== 'doing') settleFocus(active.entry_id);
+  }
+  const timers = db.prepare('SELECT * FROM focus_timers').all();
+  const running = timers.find(timer => timer.running_since !== null);
+  return {activeId: running?.entry_id || '', runningSince: running?.running_since || null, elapsed: Object.fromEntries(timers.map(timer => [timer.entry_id, timer.elapsed_ms])), serverNow: Date.now()};
+}
+
+function pauseFocus(timer, now) {
+  settleFocus(timer.entry_id, now);
+  const row = db.prepare('SELECT data FROM entries WHERE id=?').get(timer.entry_id);
+  if (row) {
+    const item = JSON.parse(row.data);
+    if (item.status === 'doing' && !item.archivedAt) updateStoredEntry(item, {status: timer.previous_status}, new Date(now).toISOString());
+  }
+}
+
+app.get('/api/focus', (req, res) => res.json(focusState()));
+app.post('/api/focus', (req, res) => {
+  const {action, id} = req.body || {};
+  if (!['start', 'pause', 'complete'].includes(action) || typeof id !== 'string') return res.status(400).json({error: '请选择有效的计时操作'});
+  try {
+    transaction(() => {
+      const now = Date.now(), stamp = new Date(now).toISOString();
+      const row = db.prepare('SELECT data FROM entries WHERE id=?').get(id);
+      if (!row) throw new Error('任务已不存在');
+      const item = hydrateLoopEntry(JSON.parse(row.data));
+      if (item.archivedAt || item.type === 'divider' || ['done', 'removed'].includes(item.status)) throw new Error('已完成、取消或归档的条目不能计时');
+      focusState();
+      const active = db.prepare('SELECT * FROM focus_timers WHERE running_since IS NOT NULL').get();
+      if (action === 'start') {
+        if (active?.entry_id === id) return;
+        if (active) pauseFocus(active, now);
+        updateStoredEntry(item, {status: 'doing', collapsed: false}, stamp);
+        const previous = ['open', 'waiting'].includes(item.status) ? item.status : 'open';
+        db.prepare('INSERT INTO focus_timers(entry_id,elapsed_ms,running_since,previous_status) VALUES (?,0,?,?) ON CONFLICT(entry_id) DO UPDATE SET running_since=excluded.running_since,previous_status=excluded.previous_status').run(id, now, previous);
+      } else {
+        if (active?.entry_id !== id) throw new Error('当前计时任务已改变，请刷新后重试');
+        if (action === 'pause') { pauseFocus(active, now); return; }
+        settleFocus(id, now);
+        const elapsed = db.prepare('SELECT elapsed_ms FROM focus_timers WHERE entry_id=?').get(id).elapsed_ms;
+        const entries = readEntries().filter(entry => !entry.archivedAt), descendants = new Set([id]);
+        let changed = true;
+        while (changed) { changed = false; for (const entry of entries) if (descendants.has(entry.parentId) && !descendants.has(entry.id)) { descendants.add(entry.id); changed = true; } }
+        for (const entry of entries) {
+          if (!descendants.has(entry.id)) continue;
+          const patch = {};
+          if (entry.type === 'todo' && !['done', 'removed'].includes(entry.status)) patch.status = 'done';
+          if (entry.id === id) {
+            if (entry.type !== 'todo') patch.status = active.previous_status;
+            patch.content = [entry.content, '#ZEN 耗时' + focusDuration(elapsed)].filter(Boolean).join('\n');
+          }
+          if (Object.keys(patch).length) updateStoredEntry(entry, patch, stamp);
+        }
+      }
+    });
+    res.json({focus: focusState(), items: unarchivedEntries()});
+  } catch (error) { res.status(400).json({error: error.message}); }
 });
 
 app.get('/api/entries', (req, res) => {
@@ -570,6 +647,7 @@ app.post('/api/archive', (req, res) => {
     }
     for (const item of items) {
       if (!archiveIds.has(item.id)) continue;
+      settleFocus(item.id);
       item.archivedAt = now;
       item.updatedAt = now;
       db.prepare('UPDATE entries SET data=? WHERE id=?').run(JSON.stringify(item), item.id);
@@ -769,6 +847,7 @@ function storeEntry(item, onSaved) {
     return [entry.parentId, ...(entry.dependencies || [])].filter(Boolean).some(next => reaches(next, seen));
   };
   if (links.some(id => reaches(id))) throw new Error('任务关系不能形成循环');
+  if (item.status !== 'doing' || item.archivedAt) settleFocus(item.id);
   db.prepare('INSERT OR REPLACE INTO entries VALUES (?,?)').run(item.id, JSON.stringify(item));
   onSaved?.();
   return hydrateLoopEntry(item);

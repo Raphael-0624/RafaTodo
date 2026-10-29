@@ -194,6 +194,23 @@ img[role="button"]:focus-visible{outline:2px solid #438865;outline-offset:3px}
 @media(hover:none){.drag-handle{opacity:.6}}
 @media(max-width:720px){.error-toast{top:12px;width:calc(100vw - 24px);max-width:none;padding:7px 8px 7px 12px}.toast-retry{min-height:36px}.toast-close{width:36px;height:36px}}
 .is-resizing{user-select:none}
+.focus-card{position:fixed;z-index:35;top:94px;left:50%;transform:translateX(-50%);width:min(560px,calc(100vw - 32px));max-height:min(55vh,580px);max-height:min(55dvh,580px);display:flex;flex-direction:column;border:1px solid #bacbb2;border-radius:16px;background:#fcfdf9;box-shadow:0 16px 48px #293b2926,0 2px 8px #293b2912;overflow:hidden;animation:focus-card-in 220ms ease-out}
+.focus-card-head{display:flex;align-items:center;gap:7px;flex:0 0 auto;padding:12px 18px 10px;border-bottom:1px solid #e4eadf;background:linear-gradient(110deg,#eef5e8,#fcfdf9);color:#4c7043;font-size:11px;font-weight:650;letter-spacing:.04em}
+.focus-status-dot{width:6px;height:6px;border-radius:50%;background:#64935a;box-shadow:0 0 0 3px #64935a17}
+.focus-domain{margin-left:auto;font-size:9px;font-weight:400;color:#94a08d}
+.focus-card-body{min-height:0;overflow:auto;padding:10px 18px 12px;overscroll-behavior:contain;scrollbar-width:thin}
+.focus-card-foot{display:flex;align-items:center;justify-content:space-between;flex:0 0 auto;gap:12px;padding:10px 16px;border-top:1px solid #e4eadf;background:#f2f6ed}
+.focus-timer{color:#4b6d43;font-size:19px;line-height:1;font-variant-numeric:tabular-nums;letter-spacing:.04em}
+.focus-card-actions{display:flex;gap:5px}
+.focus-card-actions button{min-height:34px;padding:5px 10px;border:1px solid #d8e2cf;border-radius:7px;color:#638058;font-size:11px;background:#fcfdf9}
+.focus-card-actions .focus-complete{background:#527d49;border-color:#527d49;color:#fff}
+.focus-card-actions button:hover:not(:disabled){filter:brightness(.96)}
+.focus-card .row-actions,.row-actions.task-actions{opacity:1;pointer-events:auto}
+.task-actions .row-menu-trigger{width:auto;min-width:24px}
+.task-resume{font-size:10px;color:#638058;white-space:nowrap;padding:0 3px}
+.is-doing>.entry-read>.row-actions .row-menu-trigger{color:#438865;background:#eaf2e5;border-radius:4px}
+@keyframes focus-card-in{from{opacity:0;translate:0 -8px}to{opacity:1;translate:0 0}}
+@media(max-width:720px){.focus-card{top:78px;width:calc(100vw - 24px);max-height:55dvh}.focus-card-head{padding:10px 12px}.focus-card-body{padding:8px 12px}.focus-card-foot{padding:8px 10px;gap:5px}.focus-card-actions{gap:4px}.focus-card-actions button{min-height:44px;padding:5px 8px}.focus-timer{font-size:17px}.focus-card .entry-read{padding:4px 2px;gap:5px}.focus-card .entry-title{font-size:12px;line-height:20px}.focus-card .entry{margin-left:calc(var(--depth)*10px)}.focus-card .group-children{padding-left:7px}.focus-card .row-actions .row-menu-trigger{width:24px;min-width:24px;height:30px;margin:-4px -3px 0 0}}
 .row-actions{display:flex;gap:1px;opacity:0;pointer-events:none;flex:0 0 auto;margin-top:-2px;margin-left:2px}
 .row-actions button{display:grid;place-items:center;width:20px;height:20px;padding:0;color:#8e998a;border-radius:3px}
 .entry:hover .row-actions,.entry:focus-within .row-actions{opacity:1;pointer-events:auto}
@@ -248,7 +265,7 @@ img[role="button"]:focus-visible{outline:2px solid #438865;outline-offset:3px}
 .note-line{display:block}.entry-title strong{font-weight:650}
 .is-divider .entry-title{width:100%;padding:8px 0}.md-rule{display:block;width:100%;border-top:1px solid #cad3c3}
 .is-divider .kind-mark{visibility:hidden}
-.context-menu{position:fixed;z-index:20;min-width:178px;padding:5px;background:#fff;border:1px solid #dce5d9;border-radius:5px;box-shadow:0 8px 24px #30402a22}
+.context-menu{position:fixed;z-index:80;min-width:178px;padding:5px;background:#fff;border:1px solid #dce5d9;border-radius:5px;box-shadow:0 8px 24px #30402a22}
 .context-menu button{display:block;width:100%;padding:8px 10px;text-align:left;font-size:11px;color:#4d5d4b;border-radius:3px}
 .context-menu button:hover{background:#eef4eb;color:#2f6d4c}
 .context-menu.row-menu{min-width:152px}

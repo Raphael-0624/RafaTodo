@@ -5,6 +5,7 @@ import {domains,parseLine,toLine,treeRows,workPaneMap,pasteLink,workPanes,workPa
 import {dropPlacement,pastedLines} from './lib/interactions.js';
 import {TaskDialog,LoopHistoryDialog} from './components/TaskDialogs.jsx';
 import {normalizeLayout,moveDivider,dividerBounds,defaultLayout} from './lib/layout.js';
+import {focusElapsed,focusClock} from './lib/focus.js';
 import {ImagePreviewProvider,PreviewImage} from './components/ImagePreview.jsx';
 import './style.css';
 
@@ -252,6 +253,8 @@ function App(){
   const [pasteChoice,setPasteChoice]=useState(null),[pasteBusy,setPasteBusy]=useState(false);
   const pasteLock=useRef(false);
   const [zen,setZen]=useState(null),[zenNow,setZenNow]=useState(Date.now()),[zenConfirm,setZenConfirm]=useState('');
+  const [focus,setFocus]=useState({activeId:'',runningSince:null,elapsed:{}}),[focusBusy,setFocusBusy]=useState(false);
+  const focusLock=useRef(false),focusRevision=useRef(0);
   const [inboxText,setInboxText]=useState(()=>readStored('rafa-inbox-text','')),[inboxBatches,setInboxBatches]=useState(()=>readStored('rafa-inbox-batches',[])),[inboxBusy,setInboxBusy]=useState(false),[inboxAdopting,setInboxAdopting]=useState(''),[inboxPhase,setInboxPhase]=useState(''),[inboxOpen,setInboxOpen]=useState(false);
   const autoProcessed=useRef(readStored('rafa-inbox-auto-source',''));
   const [layout,setLayout]=useState(readLayout);
@@ -310,7 +313,7 @@ function App(){
   useEffect(()=>{try{localStorage.setItem('rafa-layout-v2',JSON.stringify(layout));}catch{}},[layout]);
   useEffect(()=>{
     if(!authenticated)return;
-    const refresh=()=>{if(document.visibilityState!=='visible'||saving.current.size||pasteLock.current)return;api('/api/entries').then(entries=>{if(saving.current.size||pasteLock.current)return;itemsRef.current=entries;setItems(entries);}).catch(()=>{});};
+    const refresh=()=>{if(document.visibilityState!=='visible'||saving.current.size||pasteLock.current||focusLock.current)return;const revision=focusRevision.current;Promise.all([api('/api/entries'),api('/api/focus')]).then(([entries,state])=>{if(saving.current.size||pasteLock.current||focusLock.current||revision!==focusRevision.current)return;itemsRef.current=entries;setItems(entries);applyFocus(state);}).catch(()=>{});};
     const timer=setInterval(refresh,30000);
     window.addEventListener('focus',refresh);document.addEventListener('visibilitychange',refresh);
     return ()=>{clearInterval(timer);window.removeEventListener('focus',refresh);document.removeEventListener('visibilitychange',refresh);};
@@ -326,35 +329,44 @@ function App(){
   useEffect(()=>{try{localStorage.setItem('rafa-inbox-batches',JSON.stringify(inboxBatches));}catch{}},[inboxBatches]);
   useEffect(()=>{if(!inboxText.trim()||inboxBusy)return;const source=inboxText.trim();if(source===autoProcessed.current)return;const timer=setTimeout(()=>runInboxAI(source),60000);return()=>clearTimeout(timer);},[inboxText,inboxBusy]);
   const itemsRef=useRef(items);itemsRef.current=items;
-  useEffect(()=>{if(!zen)return;const timer=setInterval(()=>setZenNow(Date.now()),1000);return()=>clearInterval(timer);},[zen]);
-  useEffect(()=>{if(!zen)return;const onKeyDown=event=>{if(event.key==='Escape'){event.preventDefault();setZenConfirm('hold');}};document.addEventListener('keydown',onKeyDown);return()=>document.removeEventListener('keydown',onKeyDown);},[zen]);
-  function startZen(item){setMenu(null);setZen({id:item.id,startedAt:Date.now()});setZenNow(Date.now());setZenConfirm('');}
-  function zenDuration(milliseconds){const seconds=Math.max(0,Math.floor(milliseconds/1000)),hours=Math.floor(seconds/3600),minutes=Math.floor(seconds%3600/60),rest=seconds%60;return (hours?hours+'时':'')+(minutes?minutes+'分':'')+rest+'秒';}
-  function zenClock(milliseconds){const seconds=Math.max(0,Math.floor(milliseconds/1000)),hours=Math.floor(seconds/3600),minutes=Math.floor(seconds%3600/60),rest=seconds%60;return hours?[hours,minutes,rest].map(value=>String(value).padStart(2,'0')).join(':'):[minutes,rest].map(value=>String(value).padStart(2,'0')).join(':');}
+  function applyFocus(value){setFocus({...value,offset:value.serverNow-Date.now()});setZenNow(Date.now());}
+  async function fetchFocus(){const revision=focusRevision.current,value=await api('/api/focus');if(revision===focusRevision.current&&!focusLock.current)applyFocus(value);}
+  useEffect(()=>{if(authenticated)fetchFocus().catch(error=>setError(error.message));},[authenticated]);
+  useEffect(()=>{if(!focus.activeId)return;const timer=setInterval(()=>setZenNow(Date.now()),1000);return()=>clearInterval(timer);},[focus.activeId]);
+  useEffect(()=>{if(zen&&zen.id!==focus.activeId){setZen(null);setZenConfirm('');}},[zen,focus.activeId]);
+  useEffect(()=>{
+    if(!focus.activeId||!entriesLoaded||focusLock.current)return;
+    const root=items.find(item=>item.id===focus.activeId);
+    if(!root||root.status!=='doing')fetchFocus().catch(()=>{});
+  },[items,entriesLoaded,focus.activeId]);
+  useEffect(()=>{if(!zen)return;const onKeyDown=event=>{if(event.key==='Escape'){event.preventDefault();setZen(null);setZenConfirm('');}};document.addEventListener('keydown',onKeyDown);return()=>document.removeEventListener('keydown',onKeyDown);},[zen]);
+  async function runFocus(action,id){
+    if(focusLock.current)return false;
+    focusLock.current=true;focusRevision.current++;setFocusBusy(true);setError('');setMenu(null);
+    try{
+      if(draft&&!await save())return false;
+      const result=await api('/api/focus','POST',{action,id});
+      applyItems(result.items);applyFocus(result.focus);return true;
+    }catch(error){setError(error.message,()=>runFocus(action,id));return false;}
+    finally{focusLock.current=false;setFocusBusy(false);}
+  }
+  async function startFocus(item,mode='card'){
+    if(await runFocus('start',item.id)){setZen(mode==='zen'?{id:item.id}:null);setZenConfirm('');}
+  }
+  function startZen(item){return startFocus(item,'zen');}
+  async function finishFocus(action){
+    if(await runFocus(action,focus.activeId)){setZen(null);setZenConfirm('');}
+  }
+  function focusLabel(item){return focus.activeId===item.id?'进行中':!['done','removed'].includes(item.status)&&Object.hasOwn(focus.elapsed,item.id)?'继续':'设为进行中';}
+  const focusRoot=items.find(item=>item.id===focus.activeId&&item.status==='doing');
+  const elapsed=focusElapsed(focus,focus.activeId,zenNow+(focus.offset||0));
   function zenTree(item){const byParent=new Map();for(const entry of itemsRef.current){if(!byParent.has(entry.parentId||''))byParent.set(entry.parentId||'',[]);byParent.get(entry.parentId||'').push(entry);}const result=[];function visit(entry,depth){result.push({item:entry,depth});for(const child of byParent.get(entry.id)||[])visit(child,depth+1);}visit(item,0);return result;}
   function zenDescription(value){const parts=[],pattern=/(!\[([^\]]*)\]\((https?:\/\/[^\s)]+|\/uploads\/[^\s)]+)\)|(\n))/g;let start=0,match;while((match=pattern.exec(value))){if(match.index>start)parts.push(inline(value.slice(start,match.index)));parts.push(match[4]?<br key={'br-'+match.index}/>:<PreviewImage key={'img-'+match.index} src={match[3]} alt={match[2]||'描述图片'}/>);start=pattern.lastIndex;}if(start<value.length)parts.push(inline(value.slice(start)));return parts;}
   function zenMetadata(item){const rows=[];if(item.type)rows.push(item.type==='todo'?'任务':item.type==='group'?'分组':item.type==='text'?'文本':item.type==='link'?'链接':item.type==='image'?'图片':item.type==='bullet'?'条目':'分隔线');if(item.status==='done')rows.push('已完成');else if(item.status==='doing')rows.push('进行中');else if(item.status==='waiting')rows.push('等待中');else if(item.status==='removed')rows.push('已取消');if(item.priority==='urgent')rows.push('!! 紧急');else if(item.priority==='high')rows.push('! 重要');if(item.owner)rows.push('@'+item.owner);for(const person of (item.people||'').split(/[,，]\s*/).filter(Boolean))rows.push('@'+person);for(const tag of (item.tags||'').split(/[,，]\s*/).filter(Boolean))rows.push('#'+tag);for(const [key,label] of [['dueDate','截止'],['planDate','计划'],['followupDate','跟进'],['stage','阶段']])if(item[key])rows.push(label+' '+item[key]);for(const [key,value] of Object.entries(item.custom||{}))if(value)rows.push(key+' · '+value);for(const id of item.dependencies||[])rows.push('前置 · '+(itemsRef.current.find(entry=>entry.id===id)?.title||id));for(const id of item.related||[])rows.push('关联 · '+(itemsRef.current.find(entry=>entry.id===id)?.title||id));return rows;}
   async function finishZen(action){
-    if(!zen||pending.has('zen'))return;
-    if(zenConfirm!==action){setZenConfirm(action);return;}
-    setError('');
-    const elapsed=zenDuration(Date.now()-zen.startedAt),record=`#ZEN ${action==='done'?'耗时':'已耗时'}${elapsed}`;
-    try{
-      if(draft&&!await save())return;
-      markPending('zen',true);
-      const entries=itemsRef.current,root=entries.find(item=>item.id===zen.id);
-      if(!root){setZen(null);return;}
-      const tree=zenTree(root),updates=new Map();
-      if(action==='done'){
-        for(const {item} of tree)if(item.type==='todo'&&item.status!=='removed'&&item.status!=='done')updates.set(item.id,{...item,status:'done'});
-        const latest=updates.get(root.id)||root;
-        updates.set(root.id,{...latest,content:[latest.content,record].filter(Boolean).join('\n')});
-      }else{
-        updates.set(root.id,{...root,content:[root.content,record].filter(Boolean).join('\n')});
-      }
-      for(const [id,value] of updates)replaceItem(await api('/api/entries/'+id,'PUT',value));
-      setZen(null);setZenConfirm('');
-    }catch(error){setError(error.message);}finally{markPending('zen',false);}
+    if(action==='hold'){setZen(null);setZenConfirm('');return;}
+    if(zenConfirm!=='done'){setZenConfirm('done');return;}
+    await finishFocus('complete');
   }
   useEffect(()=>{api('/api/auth/status').then(status=>{setAuthenticated(status.authenticated);if(status.authenticated){api('/api/entries').then(entries=>{itemsRef.current=entries;setItems(entries);setEntriesLoaded(true);}).catch(e=>setError(e.message));api('/api/archive').then(setArchived).catch(e=>setError(e.message));}}).catch(e=>setError(e.message)).finally(()=>setLoading(false));},[]);
   useEffect(()=>()=>{drag.current?.cleanup?.();},[]);
@@ -626,15 +638,15 @@ function App(){
   function editor(){
     return <EntryEditor key={draft.editorKey||draft.id} draft={draft} items={items} initialText={draft.editorSeed||''} onTextChange={value=>{editorTextRef.current=value;}} onSave={source=>save(true,source)} onClose={close} onUpload={file=>upload(file,draft)} onIndent={(outdent,source)=>indent(outdent,source)} onNext={source=>insertNextTask(source)} onPasteChoice={choice=>{setError('');setPasteChoice(choice);}}/>;
   }
-  function row(item,depth){
-    const editing=draft?.id===item.id,done=item.status==='done',removed=item.status==='removed',group=item.type==='group',divider=item.type==='divider';
+  function row(item,depth,floating=false){
+    const editing=!floating&&draft?.id===item.id,done=item.status==='done',removed=item.status==='removed',group=item.type==='group',divider=item.type==='divider';
     const descendants=descendantsOf(item.id);
     const tasks=items.filter(entry=>entry.id!==item.id&&descendants.has(entry.id)&&entry.type==='todo'&&entry.status!=='removed');
     const target=drop?.targetId===item.id?drop.placement:'';
     const timeTitle=[['createdAt','创建'],['updatedAt','更新'],['completedAt','完成'],['removedAt','移除']].filter(([key])=>item[key]).map(([key,name])=>name+'：'+new Date(item[key]).toLocaleString('zh-CN',{hour12:false})).join('\n');
-    return <div key={item.id} className={'entry '+(done?'is-done ':'')+(removed?'is-removed ':'')+(group?'is-group ':'')+(divider?'is-divider ':'')+(item.url?'has-link ':'')+(item.pinnedAt?'is-pinned ':'')+(dragging===item.id?'drag-source ':'')+(target?'drop-'+target:'')} data-entry-id={item.id} data-depth={depth} style={{'--depth':depth}} onPointerDown={event=>{if(event.target.closest('button,a,textarea,input,.row-actions,.group-controls,.group-picker'))return;beginDrag(event,item);}} onClick={event=>{if(event.target.closest('button,a,textarea,.entry-body,.row-actions,.group-controls,.group-picker')||editing)return;open(item);}} onContextMenu={event=>{if(event.target.closest('textarea'))return;event.preventDefault();setMenu({x:event.clientX, y:event.clientY,item});}}>
+    return <div key={item.id} className={'entry '+(done?'is-done ':'')+(item.status==='doing'?'is-doing ':'')+(removed?'is-removed ':'')+(group?'is-group ':'')+(divider?'is-divider ':'')+(item.url?'has-link ':'')+(item.pinnedAt?'is-pinned ':'')+(dragging===item.id?'drag-source ':'')+(target?'drop-'+target:'')} data-entry-id={floating?undefined:item.id} data-focus-entry-id={floating?item.id:undefined} data-depth={depth} style={{'--depth':depth}} onPointerDown={event=>{if(floating||event.target.closest('button,a,textarea,input,.row-actions,.group-controls,.group-picker'))return;beginDrag(event,item);}} onClick={event=>{if(event.target.closest('button,a,textarea,.entry-body,.row-actions,.group-controls,.group-picker')||editing)return;open(item);}} onContextMenu={event=>{if(event.target.closest('textarea'))return;event.preventDefault();setMenu({x:event.clientX, y:event.clientY,item});}}>
       {target&&<span className="drop-placement-note" aria-hidden="true">{target==='inside'?'缩进为子条目':target==='before'?'同级 · 插到前面':'同级 · 插到整组后面'}</span>}
-      <button className="drag-handle" title="拖动排序；中部缩进，边缘同级插入" aria-label={'拖动 '+titleOf(item)} onPointerDown={event=>{event.stopPropagation();beginDrag(event,item);}}><DotsSixVertical size={14}/></button>
+      {!floating&&<button className="drag-handle" title="拖动排序；中部缩进，边缘同级插入" aria-label={'拖动 '+titleOf(item)} onPointerDown={event=>{event.stopPropagation();beginDrag(event,item);}}><DotsSixVertical size={14}/></button>}
       {editing?editor():<div className="entry-read">
         {!group&&descendants.size>0&&<button className={'group-toggle task-toggle '+(item.collapsed?'collapsed':'')} aria-label={(item.collapsed?'展开':'收起')+descendants.size+' 个子条目'} aria-expanded={!item.collapsed} disabled={pending.has(item.id)} onClick={()=>configureGroup(item,{collapsed:!item.collapsed})}><CaretDown size={13}/></button>}
         {group?<><button className={'group-toggle '+(item.collapsed?'collapsed':'')} aria-label={item.collapsed?'展开分组':'收起分组'} aria-expanded={!item.collapsed} onClick={()=>configureGroup(item,{collapsed:!item.collapsed})}><CaretDown size={15}/></button><button className="group-signature" title="选择分组图标和底色" onClick={()=>setPicker(picker===item.id?'':item.id)}>{item.signature||'🌿'}</button>{picker===item.id&&<div className="group-picker"><div>{['🌿','📌','📝','🚀','💡','🏠','💼'].map(signature=><button key={signature} aria-label={'图标 '+signature} onClick={()=>{configureGroup(item,{signature});setPicker('');}}>{signature}</button>)}</div><div>{['sage','sand','blue','rose','none'].map(tone=><button className={'tone-swatch tone-'+tone} key={tone} aria-label={'底色 '+tone} onClick={()=>{configureGroup(item,{tone});setPicker('');}}/>)}</div></div>}</>:divider?<span className="kind-mark">—</span>:item.type==='todo'?<button className={'checkbox '+(done?'checked':'')} aria-label={done?'重新打开任务':'完成任务'} onClick={()=>updateStatus(item)} disabled={pending.has(item.id)}>{done&&<Check size={11} weight="bold"/>}{removed&&<span>−</span>}</button>:<span className="kind-mark">{item.type==='text'?<TextT size={15}/>:item.type==='link'?<LinkSimple size={15}/>:item.type==='bullet'?<span>•</span>:<ImageSquare size={15}/>}</span>}
@@ -644,8 +656,8 @@ function App(){
         {group&&<div className="group-controls"><span className="group-count" title="已完成 / 总任务数（不含取消）">{tasks.filter(task=>task.status==='done').length}/{tasks.length}</span><button title="在分组内写一条" aria-label="在分组内新增条目" onClick={()=>open(null,item.domain,item.id)}><Plus size={14}/></button>
 
         </div>}
-        <div className="row-actions">
-          <button className="row-menu-trigger" title="更多操作" aria-label={'更多操作：'+titleOf(item)} aria-haspopup="menu" aria-expanded={menu?.item?.id===item.id} disabled={pending.has(item.id)} onClick={event=>{event.stopPropagation();const rect=event.currentTarget.getBoundingClientRect();setMenu(menu?.item?.id===item.id?null:{x:rect.right-180,y:rect.bottom+4,item,kind:'row'});}}><DotsThree size={17} weight="bold"/></button>
+        <div className={'row-actions'+(item.type==='todo'?' task-actions':'')}>
+          <button className="row-menu-trigger" title={item.type==='todo'?focusLabel(item)+' · 更多操作':'更多操作'} aria-label={'更多操作：'+titleOf(item)} aria-haspopup="menu" aria-expanded={menu?.item?.id===item.id} disabled={pending.has(item.id)} onClick={event=>{event.stopPropagation();const rect=event.currentTarget.getBoundingClientRect();setMenu(menu?.item?.id===item.id?null:{x:rect.right-180,y:rect.bottom+4,item,kind:'row'});}}>{item.type==='todo'&&!['done','removed'].includes(item.status)&&focus.activeId!==item.id&&Object.hasOwn(focus.elapsed,item.id)?<span className="task-resume">继续</span>:<DotsThree size={17} weight="bold"/>}</button>
         </div>
       </div>}
     </div>;
@@ -661,6 +673,17 @@ function App(){
       return <React.Fragment key={item.id}>{draft?.insert?.placement==='before'&&insertion}<div className={'task-branch '+(drop?.targetId===item.id&&drop.placement==='after'?'branch-drop-after':'')}>{row(item,level)}{!item.collapsed&&children}{!item.collapsed&&draft&&!draft.id&&!draft.insert&&draft.parentId===item.id&&editor()}</div>{draft?.insert?.placement==='after'&&insertion}</React.Fragment>;
     });}
     return renderBranch();
+  }
+  function renderFocusTree(root){
+    const rows=treeRows(items,root.domain),seen=new Set();
+    function branch(item,depth){
+      if(seen.has(item.id))return null;seen.add(item.id);
+      const group=item.type==='group';
+      const children=!item.collapsed&&rows.filter(({item:child})=>child.parentId===item.id).map(({item:child})=>branch(child,group?0:depth+1));
+      if(group)return <div key={item.id} className={'group-block tone-'+(['sage','sand','blue','rose','none'].includes(item.tone)?item.tone:'sage')} style={{marginLeft:depth?18:0}}>{row(item,0,true)}{!item.collapsed&&<div className="group-children">{children}</div>}</div>;
+      return <div key={item.id} className="task-branch">{row(item,depth,true)}{children}</div>;
+    }
+    return branch(root,0);
   }
   function paneOf(item){
     if(item.domain!=='Work')return '';
@@ -726,6 +749,15 @@ function App(){
         </div>
       </div></footer>
     </div>
+    {focusRoot&&!zen&&<section className="focus-card" role="region" aria-label="进行中的任务" aria-busy={focusBusy}>
+      <header className="focus-card-head"><span className="focus-status-dot"/>进行中<span className="focus-domain">{focusRoot.domain.toUpperCase()}</span></header>
+      <div className="focus-card-body">{renderFocusTree(focusRoot)}</div>
+      <footer className="focus-card-foot"><span className="focus-timer" aria-label="累计进行时长">{focusClock(elapsed)}</span><div className="focus-card-actions">
+        <button disabled={focusBusy} onClick={()=>{setZen({id:focusRoot.id});setZenConfirm('');}}>ZEN</button>
+        <button className="focus-complete" disabled={focusBusy} onClick={()=>finishFocus('complete')}>完成任务</button>
+        <button disabled={focusBusy} onClick={()=>finishFocus('pause')}>暂停</button>
+      </div></footer>
+    </section>}
     {loopHistory&&<LoopHistoryDialog key={loopHistory.id} item={loopHistory} onClose={()=>setLoopHistory(null)}/>}
     {pasteChoice&&<TaskDialog title="粘贴多行内容" busy={pasteBusy} onClose={()=>setPasteChoice(null)} onAfterClose={pasteChoice.focus}>
       <div className="task-dialog-body">{error&&<p className="dialog-error" role="alert">{error}</p>}<p>保留在一个条目中，还是将编辑框内容按非空行拆分？</p><pre className="paste-preview">{pasteChoice.text}</pre><p className="dialog-hint">共 {pastedLines(pasteChoice.text).length} 条。{draft?.id?'第一条保留原任务及其子任务，其余紧随其后。':'保留当前栏目、分栏和缩进位置。'} 拆分后各行按原有输入语法识别。</p>{pastedLines(pasteChoice.text).length>200&&<p className="dialog-error">一次最多拆分 200 条，请保留为一条或分批粘贴。</p>}</div>
@@ -742,17 +774,18 @@ function App(){
       </section>):<p className="inbox-empty">整理后的任务草稿会显示在这里</p>}</div>
       <div className="inbox-drafts-foot"><span>逐条采纳，即刻加入对应栏目。</span>{inboxBatches.length>0&&inboxBatches.every(batch=>batch.drafts.every(draft=>draft.decision!=='pending'))&&<button onClick={clearInbox}>清空原文与已处理批次</button>}</div>
     </InboxDialog>}
-    {zen&&(()=>{const root=items.find(item=>item.id===zen.id);if(!root)return null;const rows=zenTree(root);return <div className="zen-screen" role="dialog" aria-modal="true" aria-label="ZEN 专注模式"><div className="zen-atmosphere" aria-hidden="true"><i/><i/><i/><i/></div><div className="zen-content"><div className="zen-label">ZEN <span>{root.domain.toUpperCase()}</span></div><div className="zen-timer" aria-live="off">{zenClock(zenNow-zen.startedAt)}</div><div className="zen-tree">{rows.map(({item,depth})=><article className={'zen-task '+(item.status==='done'?'is-done':'')} key={item.id} style={{'--zen-depth':depth}}><div className="zen-task-line"><span className="zen-mark">{item.status==='done'?'✓':item.type==='group'?'◇':'·'}</span><div className="zen-task-body"><h1>{inline(titleOf(item))}</h1>{item.content&&<p>{zenDescription(item.content)}</p>}{item.image&&<PreviewImage className="zen-main-image" src={item.image} alt={item.title||'任务图片'}/>}</div></div>{zenMetadata(item).length>0&&<div className="zen-meta">{zenMetadata(item).map((value,index)=><span key={index}>{value}</span>)}</div>}{item.url&&<a href={item.url} target="_blank" rel="noreferrer">{item.url}</a>}</article>)}</div><div className="zen-actions">{zenConfirm==='hold'?<><button onClick={()=>setZenConfirm('')} disabled={pending.has('zen')}>取消</button><button className="zen-hold confirming" onClick={()=>finishZen('hold')} disabled={pending.has('zen')}>确认搁置？</button></>:<><button className={'zen-done '+(zenConfirm==='done'?'confirming':'')} onClick={()=>finishZen('done')} disabled={pending.has('zen')}>{zenConfirm==='done'?'确认完成？':<><Check size={16}/>完成</>}</button>{zenConfirm==='done'?<button onClick={()=>setZenConfirm('')} disabled={pending.has('zen')}>取消</button>:<button className="zen-hold" onClick={()=>finishZen('hold')} disabled={pending.has('zen')}>搁置</button>}</>}</div></div></div>})()}
+    {zen&&focusRoot&&zen.id===focus.activeId&&(()=>{const root=items.find(item=>item.id===zen.id);if(!root)return null;const rows=zenTree(root);return <div className="zen-screen" role="dialog" aria-modal="true" aria-label="ZEN 专注模式"><div className="zen-atmosphere" aria-hidden="true"><i/><i/><i/><i/></div><div className="zen-content"><div className="zen-label">ZEN <span>{root.domain.toUpperCase()}</span></div><div className="zen-timer" aria-live="off">{focusClock(elapsed)}</div><div className="zen-tree">{rows.map(({item,depth})=><article className={'zen-task '+(item.status==='done'?'is-done':'')} key={item.id} style={{'--zen-depth':depth}}><div className="zen-task-line"><span className="zen-mark">{item.status==='done'?'✓':item.type==='group'?'◇':'·'}</span><div className="zen-task-body"><h1>{inline(titleOf(item))}</h1>{item.content&&<p>{zenDescription(item.content)}</p>}{item.image&&<PreviewImage className="zen-main-image" src={item.image} alt={item.title||'任务图片'}/>}</div></div>{zenMetadata(item).length>0&&<div className="zen-meta">{zenMetadata(item).map((value,index)=><span key={index}>{value}</span>)}</div>}{item.url&&<a href={item.url} target="_blank" rel="noreferrer">{item.url}</a>}</article>)}</div><div className="zen-actions"><button className={'zen-done '+(zenConfirm==='done'?'confirming':'')} onClick={()=>finishZen('done')} disabled={focusBusy}>{zenConfirm==='done'?'确认完成？':<><Check size={16}/>完成</>}</button>{zenConfirm==='done'?<button onClick={()=>setZenConfirm('')} disabled={focusBusy}>取消</button>:<button className="zen-hold" onClick={()=>finishZen('hold')} disabled={focusBusy}>搁置</button>}</div></div></div>})()}
     {dragging&&<div className="drag-caption" role="status">{drop?.placement==='inside'?'成为「'+titleOf(byId.get(drop.targetId))+'」的子条目':drop?.placement==='end'?(drop.domain==='Work'?'移到 WORK '+workPaneName(drop.workPane)+'末尾':'移到 '+drop.domain+' 末尾'):drop?'插到「'+titleOf(byId.get(drop.targetId))+'」'+(drop.placement==='before'?'之前':'之后')+'（同级）':'此处不可放置'} · Esc 取消</div>}
     {menu&&<div className={'context-menu '+(menu.kind==='row'?'row-menu':'')} role="menu" style={{left:Math.max(8,Math.min(menu.x,window.innerWidth-190)),top:Math.min(menu.y,window.innerHeight-(menu.kind==='row'?270:220))}} onPointerDown={event=>event.stopPropagation()} onKeyDown={event=>{if(event.key==='Escape'){event.preventDefault();setMenu(null);}}}>
+      {menu.item.type==='todo'&&<button role="menuitem" disabled={focusBusy||['done','removed'].includes(menu.item.status)} onClick={()=>startFocus(menu.item)}>{focusLabel(menu.item)}</button>}
       {menu.kind==='row'?<>
-        {menu.item.type!=='divider'&&<button role="menuitem" disabled={pending.has(menu.item.id)} onClick={()=>startZen(menu.item)}>ZEN 专注</button>}
+        {menu.item.type!=='divider'&&<button role="menuitem" disabled={focusBusy||['done','removed'].includes(menu.item.status)} onClick={()=>startZen(menu.item)}>ZEN 专注</button>}
         <button role="menuitem" disabled={pending.has(menu.item.id)} onClick={()=>togglePin(menu.item)}>{menu.item.pinnedAt?'取消置顶':'置顶'}</button>
         <button role="menuitem" disabled={pending.has(menu.item.id)} onClick={()=>{updateStatus(menu.item,menu.item.status==='removed'?'open':'removed');setMenu(null);}}>{menu.item.status==='removed'?'恢复条目':'取消条目'}</button>
         <span className="context-separator"/>
         <button role="menuitem" className={confirmDelete===menu.item.id?'confirm-delete':''} disabled={pending.has(menu.item.id)} onClick={()=>{if(confirmDelete===menu.item.id){deleteItem(menu.item);setMenu(null);}else setConfirmDelete(menu.item.id);}}>{confirmDelete===menu.item.id?'再次点击确认删除':'永久删除'}</button>
       </>:<>
-        <button onClick={()=>startZen(menu.item)}>ZEN 专注</button>
+        <button disabled={focusBusy||['done','removed'].includes(menu.item.status)} onClick={()=>startZen(menu.item)}>ZEN 专注</button>
         <button onClick={()=>insertNear(menu.item,'before','group')}>在上方插入标题</button><button onClick={()=>insertNear(menu.item,'after','group')}>在下方插入标题</button>
         <button onClick={()=>togglePin(menu.item)}>{menu.item.pinnedAt?'取消 PIN':'PIN 置顶'}</button>
         <button onClick={()=>insertNear(menu.item,'after','todo')}>插入任务</button><button onClick={()=>{setMenu(null);open(null,menu.item.domain,menu.item.id);}}>插入子任务</button>

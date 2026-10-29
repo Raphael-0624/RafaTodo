@@ -226,6 +226,60 @@ try{
   await until('!document.querySelector(".work-pinned-list")','Unpin removes the empty top area');
   await until(`fetch('/api/entries').then(response=>response.json()).then(items=>!items.find(item=>item.id===${JSON.stringify(ids.child)}).pinnedAt)`,'Unpin saved');
 
+  async function taskAction(id,label){
+    await click(row(id)+' .row-menu-trigger');
+    await until('!!document.querySelector(".context-menu")');
+    await evaluate(`Array.from(document.querySelectorAll('.context-menu button')).find(node=>node.textContent===${JSON.stringify(label)}).click()`);
+  }
+  const focusState=()=>evaluate(`fetch('/api/focus').then(response=>response.json())`);
+  const floatButton=label=>evaluate(`Array.from(document.querySelectorAll('.focus-card-actions button')).find(node=>node.textContent===${JSON.stringify(label)}).click()`);
+  await taskAction(ids.parent,'设为进行中');
+  await until('!!document.querySelector(".focus-card")','Start floating task');
+  assert.equal(await evaluate('document.querySelectorAll(".focus-card").length'),1);
+  assert.ok(await evaluate(`!!document.querySelector('[data-focus-entry-id="${ids.child}"]')`),'Float includes child tasks');
+  assert.equal(await evaluate(`document.querySelector('[data-focus-entry-id="${ids.child}"] .entry-body').innerHTML`),await evaluate(`document.querySelector(${JSON.stringify(row(ids.child)+' .entry-body')}).innerHTML`),'Float shares main task formatting');
+  await click(`[data-focus-entry-id="${ids.parent}"] .task-toggle`);
+  await until(`!document.querySelector(${JSON.stringify(row(ids.child))})&&!document.querySelector('[data-focus-entry-id="${ids.child}"]')`,'Float folding syncs to main list');
+  await click(`[data-focus-entry-id="${ids.parent}"] .task-toggle`);
+  await until(`!!document.querySelector('[data-focus-entry-id="${ids.child}"]')`);
+  await click(`[data-focus-entry-id="${ids.child}"] .row-menu-trigger`);
+  await until('!!document.querySelector(".context-menu")');
+  assert.ok(await evaluate(`(()=>{const r=document.querySelector('.context-menu').getBoundingClientRect();return !!document.elementFromPoint(r.x+20,r.y+15)?.closest('.context-menu');})()`),'Task menus remain clickable above the float');
+  await evaluate(`document.querySelector('.context-menu').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))`);
+  const running=await focusState();assert.equal(running.activeId,ids.parent);
+  const initialClock=await evaluate('document.querySelector(".focus-timer").textContent');
+  await until(`document.querySelector('.focus-timer').textContent!==${JSON.stringify(initialClock)}`,'Timer ticks');
+  await send('Page.reload');await until('!!document.querySelector(".focus-card")','Float restores on reload');
+  assert.equal((await focusState()).runningSince,running.runningSince,'Reload does not reset timing');
+  await evaluate(`Promise.all(document.querySelector('.focus-card').getAnimations().map(animation=>animation.finished))`);
+  await screenshot('focus-card');
+  await floatButton('ZEN');await until('!!document.querySelector(".zen-screen")');
+  assert.equal(await evaluate('!!document.querySelector(".focus-card")'),false,'ZEN replaces its minimized card');
+  assert.equal((await focusState()).runningSince,running.runningSince);
+  await click('.zen-hold');await until('!!document.querySelector(".focus-card")&&!document.querySelector(".zen-screen")','One-click ZEN minimize');
+  assert.equal((await focusState()).runningSince,running.runningSince,'Minimizing keeps the same clock');
+  await floatButton('暂停');await until('!document.querySelector(".focus-card")','Pause hides the card');
+  const pausedFocus=await focusState();assert.equal(pausedFocus.activeId,'');assert.ok(pausedFocus.elapsed[ids.parent]>=1000);
+  await pause(1100);assert.equal((await focusState()).elapsed[ids.parent],pausedFocus.elapsed[ids.parent]);
+  await send('Page.reload');
+  await until(`document.querySelector(${JSON.stringify(row(ids.parent)+' .row-menu-trigger')})?.textContent==='继续'`,'Paused entry survives reload');
+  assert.equal(await evaluate(`document.querySelector(${JSON.stringify(row(ids.parent)+' .row-menu-trigger')}).textContent`),'继续');
+  await taskAction(ids.parent,'继续');await until('!!document.querySelector(".focus-card")');
+  assert.equal((await focusState()).elapsed[ids.parent],pausedFocus.elapsed[ids.parent]);
+  await taskAction(ids.sibling,'设为进行中');
+  await until(`!!document.querySelector('[data-focus-entry-id="${ids.sibling}"]')`,'Switch to another task');
+  const switchedFocus=await focusState();assert.equal(switchedFocus.activeId,ids.sibling);assert.ok(switchedFocus.elapsed[ids.parent]>=pausedFocus.elapsed[ids.parent]);
+  assert.equal(await evaluate('document.querySelectorAll(".focus-card").length'),1,'Only one float exists');
+  await taskAction(ids.parent,'继续');await until(`!!document.querySelector('[data-focus-entry-id="${ids.child}"]')`);
+  await click(`[data-focus-entry-id="${ids.child}"] .checkbox`);
+  await until(`!!document.querySelector(${JSON.stringify(row(ids.child)+'.is-done')})`,'Child completion syncs to main list');
+  await send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
+  assert.ok(await evaluate(`(()=>{const r=document.querySelector('.focus-card').getBoundingClientRect();return r.x>=0&&r.right<=innerWidth&&r.y>=0&&r.bottom<=innerHeight;})()`),'Float fits mobile');
+  await screenshot('mobile-focus-card');
+  await floatButton('完成任务');await until('!document.querySelector(".focus-card")','Finish closes the float');
+  await until(`!!document.querySelector(${JSON.stringify(row(ids.parent)+'.is-done')})`,'Finish updates the main task');
+  assert.equal((await focusState()).activeId,'');
+
   const {data:imageData}=await send('Page.captureScreenshot',{format:'png'});
   const imageIds=await evaluate(`(async()=>{
     const post=async(url,body)=>{const response=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const data=await response.json();if(!response.ok)throw Error(data.error);return data;};
@@ -282,8 +336,17 @@ try{
   assert.equal(await evaluate('!!document.querySelector(".zen-screen")&&!document.querySelector(".zen-actions .confirming")'),true,'Escape closes only the image, not ZEN');
   await openImage('.zen-task p img');
   await click('.image-viewer-close');
+  await send('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape'});
+  await until('!!document.querySelector(".focus-card")&&!document.querySelector(".zen-screen")','Escape minimizes ZEN without pausing');
+  await floatButton('ZEN');await until('!!document.querySelector(".zen-screen")');
+  await click('.zen-done');
+  await until('document.querySelector(".zen-done")?.textContent.includes("确认完成")','ZEN keeps completion confirmation');
+  assert.equal((await focusState()).activeId,imageIds.image);
+  await click('.zen-done');
+  await until('!document.querySelector(".zen-screen,.focus-card")','ZEN completion stops the shared timer');
+  assert.equal((await focusState()).activeId,'');
   assert.deepEqual(errors,[],'Browser runtime errors');
-  console.log('PASS: desktop/mobile layout, pinned area, dividers, scrolling, INBOX, collapse, loop records, paste, drop feedback and fullscreen image preview');
+  console.log('PASS: desktop/mobile layout, pinned area, scrolling, INBOX, task interactions, image preview, floating focus, pause/resume and shared ZEN timing');
 }finally{
   ws?.close();
   for(const child of [browser,app])if(child&&child.exitCode===null){const exited=new Promise(resolve=>child.once('exit',resolve));child.kill();await Promise.race([exited,pause(3000)]);}
