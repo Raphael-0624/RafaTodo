@@ -70,6 +70,13 @@ try{
   })()`);
   await send('Page.reload');await until('!!document.querySelector(".board")','board');
   await until(`!!document.querySelector(${JSON.stringify(row(ids.child))})`,'child visible');
+  assert.equal(await evaluate('!!document.querySelector(".work-pinned-list")'),false,'No empty pinned area');
+  await click(row(ids.child)+' .row-menu-trigger');
+  await until('!!document.querySelector(".context-menu")');
+  await evaluate(`Array.from(document.querySelectorAll('.context-menu button')).find(node=>node.textContent==='置顶').click()`);
+  await until('document.querySelector(".workspace>.work-pinned-list")?.textContent.includes("Child task")','WORK pins above board');
+  await until(`fetch('/api/entries').then(response=>response.json()).then(items=>!!items.find(item=>item.id===${JSON.stringify(ids.child)}).pinnedAt)`,'Pin saved');
+  assert.equal(await evaluate('!!document.querySelector("[data-domain=Work] .pinned-list")'),false,'WORK pins are outside the three-pane area');
   await click(row(ids.parent)+' .task-toggle');
   await until(`!document.querySelector(${JSON.stringify(row(ids.child))})`,'child folded');
   await until(`fetch('/api/entries').then(response=>response.json()).then(items=>items.find(item=>item.id===${JSON.stringify(ids.parent)}).collapsed===true)`,'fold saved');
@@ -85,10 +92,12 @@ try{
   assert.equal(await evaluate('!!document.querySelector(".select-mode-trigger,.selection-bar")'),false);
   const geometry=()=>evaluate(`(()=>{
     const rect=node=>{const r=node.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom};};
-    return {work:rect(document.querySelector('[data-domain="Work"]')),panes:[...document.querySelectorAll('.work-col')].map(rect),lower:[...document.querySelectorAll('.side-board>.column')].map(rect),inbox:rect(document.querySelector('.inbox-wrap')),input:rect(document.querySelector('#work-inbox')),pageWidth:document.documentElement.scrollWidth,pageHeight:document.documentElement.scrollHeight,width:innerWidth,height:innerHeight};
+    return {pins:rect(document.querySelector('.work-pinned-list')),work:rect(document.querySelector('[data-domain="Work"]')),panes:[...document.querySelectorAll('.work-col')].map(rect),lower:[...document.querySelectorAll('.side-board>.column')].map(rect),inbox:rect(document.querySelector('.inbox-wrap')),input:rect(document.querySelector('#work-inbox')),pageWidth:document.documentElement.scrollWidth,pageHeight:document.documentElement.scrollHeight,width:innerWidth,height:innerHeight};
   })()`);
   function checkGeometry(value){
     assert.equal(value.panes.length,3);
+    assert.ok(value.pins.height>0&&value.pins.bottom<=value.work.y,'Pinned area stays above WORK');
+    assert.ok(value.pins.width>value.work.width*.9,'Pinned area spans all WORK panes');
     for(const pane of value.panes)assert.ok(Math.abs(pane.width-value.work.width/3)<1,'WORK panes stay equal');
     assert.ok(value.lower.every(col=>Math.abs(col.y-value.lower[0].y)<1),'Lower domains stay side by side');
     assert.ok(value.lower[0].y>=value.work.bottom,'WORK is above lower domains');
@@ -209,6 +218,13 @@ try{
   await until('JSON.parse(localStorage.getItem("rafa-work-scroll"))?.third===90','Third pane scroll saved');
   await send('Page.reload');
   await until('document.querySelector("[data-work-pane=third] .work-col-scroll")?.scrollTop===90','Third pane scroll restored');
+  await click(row(ids.parent)+' .task-toggle');
+  await until(`!document.querySelector(${JSON.stringify(row(ids.child))})`,'Fold before locating a pin');
+  await click('.work-pinned-list .pinned-title');
+  await until(`!!document.querySelector(${JSON.stringify(row(ids.child))})`,'Pinned task locator preserves task interactions');
+  await click('.work-pinned-list .pinned-unpin');
+  await until('!document.querySelector(".work-pinned-list")','Unpin removes the empty top area');
+  await until(`fetch('/api/entries').then(response=>response.json()).then(items=>!items.find(item=>item.id===${JSON.stringify(ids.child)}).pinnedAt)`,'Unpin saved');
   assert.deepEqual(errors,[],'Browser runtime errors');
   console.log('PASS: desktop/mobile layout, divider dragging and persistence, third pane creation, INBOX autosizing, collapse, loop records, multiline paste and drop feedback');
 }finally{

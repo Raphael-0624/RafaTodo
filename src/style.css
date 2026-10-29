@@ -289,6 +289,8 @@ button:focus-visible,a:focus-visible,[role="button"]:focus-visible,textarea:focu
 .column-archive.confirm-archive:hover{background:#438865;color:#fff}
 @media(max-width:720px){.heatmap-overlay{padding:10px}.heatmap-popover{width:calc(100vw - 20px);max-height:none;padding:14px 12px 12px}.heatmap-cells{gap:1px}.heatmap-weekdays{grid-template-rows:repeat(7,minmax(0,1fr));font-size:7px}.archive-modal{padding:20px 18px}.archive-head{top:-20px}}
 .pinned-list{position:relative;z-index:3;flex:0 0 auto;margin:-6px 3px 10px;padding:5px 7px;background:#fdeeee;border-left:2px solid #c94f4f;border-radius:2px;max-height:min(45%,320px);overflow:auto}
+.work-pinned-list{margin:12px 26px 0;max-height:min(25%,240px);overscroll-behavior:contain}
+@media(max-width:720px){.work-pinned-list{margin:8px 10px 0}}
 .pinned-item{display:flex;align-items:center;gap:7px;min-height:27px;color:#b03a3a}
 .pinned-item+.pinned-item{border-top:1px solid #f2d7d7}
 .pinned-title{flex:1;min-width:0;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:#c0392b;font-weight:700;padding:4px 0}
