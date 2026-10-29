@@ -3,10 +3,29 @@ import {readFileSync} from 'node:fs';
 import React from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
 import {transformWithOxc} from 'vite';
-import {treeRows,workPaneMap} from '../src/lib/entries.js';
+import {treeRows,workPaneMap,moveEntries,nextPosition,normalizeEntryLayout} from '../src/lib/entries.js';
+import {defaultLayout,normalizeLayout,moveDivider} from '../src/lib/layout.js';
 import {selectedSubtrees,batchMoveEntries,dropPlacement,pastedLines} from '../src/lib/interactions.js';
 
 const source=readFileSync(new URL('../src/main.jsx',import.meta.url),'utf8');
+assert.deepEqual(normalizeLayout(null),defaultLayout);
+assert.deepEqual(normalizeLayout({workHeight:Infinity,dailyEnd:'20',lifeEnd:NaN}),defaultLayout);
+assert.deepEqual(normalizeLayout({workHeight:100,dailyEnd:100,lifeEnd:0}),{workHeight:80,dailyEnd:70,lifeEnd:85});
+assert.equal(moveDivider(defaultLayout,'workHeight',0).workHeight,30);
+assert.equal(moveDivider(defaultLayout,'dailyEnd',100).dailyEnd,defaultLayout.lifeEnd-15);
+assert.equal(moveDivider(defaultLayout,'lifeEnd',0).lifeEnd,defaultLayout.dailyEnd+15);
+const thirdItems=[
+  {id:'left',domain:'Work',workPane:'left',position:0},
+  {id:'right',domain:'Work',workPane:'right',position:0},
+  {id:'third',domain:'Work',workPane:'third',position:0},
+  {id:'child',domain:'Work',parentId:'third',workPane:'left',position:0}
+];
+assert.equal(workPaneMap(thirdItems).get('child'),'third');
+assert.equal(nextPosition(thirdItems,{domain:'Work',workPane:'third'}),1);
+assert.deepEqual(normalizeEntryLayout(thirdItems).map(item=>item.workPane),['left','right','third','third']);
+const toThird=moveEntries(thirdItems,{id:'right',domain:'Work',workPane:'third',placement:'end'});
+assert.equal(toThird.find(item=>item.id==='right').workPane,'third');
+assert.equal(toThird.find(item=>item.id==='left').workPane,'left');
 const start=source.indexOf('  function renderTree('),end=source.indexOf('  function paneOf(',start);
 assert.ok(start>=0&&end>start);
 const {code}=await transformWithOxc(source.slice(start,end),'tree-test.jsx',{jsx:{runtime:'classic'}});

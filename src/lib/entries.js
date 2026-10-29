@@ -1,4 +1,8 @@
 export const domains=['Work','Daily','Life','Glean & Idea'];
+// Keep the two legacy pane IDs in order; the new third pane starts empty.
+export const workPanes=['left','right','third'];
+export const workPaneName=pane=>'第'+({left:'一',right:'二',third:'三'}[pane]||'一')+'栏';
+export const validWorkPane=pane=>workPanes.includes(pane)?pane:'left';
 
 const loopDateFormatter=timeZone=>new Intl.DateTimeFormat('en-CA',{timeZone,year:'numeric',month:'2-digit',day:'2-digit'});
 
@@ -130,12 +134,12 @@ export function treeRows(entries,domain){
   return result;
 }
 
-// Positions are scoped to one visible list. WORK has two independent lists even
+// Positions are scoped to one visible list. WORK has three independent lists even
 // though their rows share the same domain, so legacy rows may contain duplicate
 // numbers across panes. Append past every sibling to keep new rows at the end.
 export function nextPosition(entries,{domain,parentId='',workPane=''}){
   const visible=entries.filter(item=>!item.archivedAt);
-  const panes=domain==='Work'?workPaneMap(visible):null,pane=workPane==='right'?'right':'left';
+  const panes=domain==='Work'?workPaneMap(visible):null,pane=panes?.get(parentId)||validWorkPane(workPane);
   return Math.max(-1,...visible.filter(item=>item.domain===domain&&(item.parentId||'')===(parentId||'')&&(domain!=='Work'||(panes.get(item.id)||'left')===pane)).map(item=>Number.isFinite(item.position)?item.position:-1))+1;
 }
 
@@ -151,7 +155,7 @@ export function workPaneMap(entries,rows=treeRows(entries,'Work')){
     const parentPane=parent?.domain==='Work'?panes.get(parent.id):'';
     const root=parent?.domain==='Work'&&rootFor.has(parent.id)?rootFor.get(parent.id):item.id;
     rootFor.set(item.id,root);
-    const ownPane=item.workPane==='left'||item.workPane==='right'?item.workPane:'';
+    const ownPane=workPanes.includes(item.workPane)?item.workPane:'';
     panes.set(item.id,parentPane||ownPane||defaults.get(root)||'left');
   }
   return panes;
@@ -201,7 +205,7 @@ export function moveEntries(entries,{id,targetId,domain,placement,workPane},pane
   collect(id);
   if(descendants.has(targetId))throw new Error('不能移到自己或自己的子条目中');
   const parentId=placement==='inside'?targetId:placement==='end'?'':target.parentId||'';
-  const destinationPane=domain==='Work'?(placement==='end'?(workPane==='right'?'right':'left'):panes.get(target.id)||'left'):'';
+  const destinationPane=domain==='Work'?(placement==='end'?validWorkPane(workPane):panes.get(target.id)||'left'):'';
   const inDestinationPane=item=>domain!=='Work'||panes.get(item.id)===destinationPane;
   const siblingIds=treeRows(entries,domain).map(row=>row.item).filter(item=>!item.archivedAt&&!descendants.has(item.id)&&(item.parentId||'')===parentId&&inDestinationPane(item)).map(item=>item.id);
   let index=placement==='inside'||placement==='end'?siblingIds.length:siblingIds.indexOf(targetId)+(placement==='after'?1:0);

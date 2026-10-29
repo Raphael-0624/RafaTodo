@@ -34,7 +34,7 @@ async function evaluate(expression){
 }
 const until=(expression,label)=>waitFor(()=>evaluate(expression),label||expression);
 const click=selector=>evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`);
-const button=text=>evaluate(`Array.from(document.querySelectorAll('dialog[open] button,.selection-bar button')).find(node=>node.textContent.trim()===${JSON.stringify(text)}).click()`);
+const button=text=>evaluate(`Array.from(document.querySelectorAll('dialog[open] button')).find(node=>node.textContent.trim()===${JSON.stringify(text)}).click()`);
 const row=id=>'[data-entry-id="'+id+'"]';
 async function screenshot(name){
   const {data}=await send('Page.captureScreenshot',{format:'png'});
@@ -82,15 +82,68 @@ try{
   assert.equal(await evaluate('!!document.querySelector(".write-row")'),false);
   await screenshot('loop-history');await click('dialog[open] [aria-label="关闭"]');
 
-  await click('.select-mode-trigger');await until('!!document.querySelector(".selection-bar")');
-  await click(row(ids.parent)+' .entry-body');await click(row(ids.child)+' .selection-check');
-  await until('document.querySelector(".selection-bar strong").textContent.includes("2")');
-  await evaluate(`(()=>{const select=document.querySelector('.selection-bar select');select.value='Daily';select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
-  await button('移动');await until('!!document.querySelector("dialog[open]")');
-  assert.ok((await evaluate('document.querySelector("dialog[open]").textContent')).includes('共 2 项'));
-  await screenshot('batch-confirmation');await button('确认移动');
-  await until('!document.querySelector("dialog[open]")&&!document.querySelector(".selection-bar")','batch complete');
-  assert.equal(await evaluate(`document.querySelector(${JSON.stringify(row(ids.child))}).closest('[data-domain]').dataset.domain`),'Daily');
+  assert.equal(await evaluate('!!document.querySelector(".select-mode-trigger,.selection-bar")'),false);
+  const geometry=()=>evaluate(`(()=>{
+    const rect=node=>{const r=node.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom};};
+    return {work:rect(document.querySelector('[data-domain="Work"]')),panes:[...document.querySelectorAll('.work-col')].map(rect),lower:[...document.querySelectorAll('.side-board>.column')].map(rect),inbox:rect(document.querySelector('.inbox-wrap')),input:rect(document.querySelector('#work-inbox')),pageWidth:document.documentElement.scrollWidth,pageHeight:document.documentElement.scrollHeight,width:innerWidth,height:innerHeight};
+  })()`);
+  function checkGeometry(value){
+    assert.equal(value.panes.length,3);
+    for(const pane of value.panes)assert.ok(Math.abs(pane.width-value.work.width/3)<1,'WORK panes stay equal');
+    assert.ok(value.lower.every(col=>Math.abs(col.y-value.lower[0].y)<1),'Lower domains stay side by side');
+    assert.ok(value.lower[0].y>=value.work.bottom,'WORK is above lower domains');
+    assert.ok(Math.abs(value.inbox.bottom-value.height)<1,'INBOX stays at the bottom');
+    assert.ok(Math.abs(value.inbox.width-value.work.width)<1,'INBOX spans the workspace');
+    assert.ok(value.pageWidth<=value.width&&value.pageHeight<=value.height,'No page overflow');
+  }
+  checkGeometry(await geometry());
+  async function dragDivider(selector,dx,dy){
+    const box=await evaluate(`(()=>{const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);
+    await send('Input.dispatchMouseEvent',{type:'mousePressed',x:box.x,y:box.y,button:'left',clickCount:1});
+    await send('Input.dispatchMouseEvent',{type:'mouseMoved',x:box.x+dx,y:box.y+dy,buttons:1});
+    await send('Input.dispatchMouseEvent',{type:'mouseReleased',x:box.x+dx,y:box.y+dy,button:'left',clickCount:1});
+    await until('!document.body.classList.contains("is-resizing")');
+  }
+  const before=await geometry();
+  await dragDivider('.layout-divider-horizontal',0,-100);
+  await until(`document.querySelector('[data-domain="Work"]').getBoundingClientRect().height<${before.work.height-70}`,'WORK height drag');
+  await dragDivider('.layout-divider-vertical',90,0);
+  await until(`document.querySelector('.side-board>.column').getBoundingClientRect().width>${before.lower[0].width+60}`,'DAILY width drag');
+  const lowerBefore=(await geometry()).lower;
+  await dragDivider('.layout-divider-vertical:last-child',80,0);
+  await until(`document.querySelector('.side-board>.column:last-of-type').getBoundingClientRect().width<${lowerBefore[2].width-50}`,'LIFE width drag');
+  checkGeometry(await geometry());
+  const savedLayout=await evaluate('localStorage.getItem("rafa-layout-v2")');
+  await send('Page.reload');await until('!!document.querySelector(".board")');
+  assert.equal(await evaluate('localStorage.getItem("rafa-layout-v2")'),savedLayout,'Divider settings persist');
+  const persisted=await geometry();checkGeometry(persisted);
+  assert.ok(Math.abs(persisted.work.height-(before.work.height-100))<3);
+
+  async function inboxValue(text){
+    await evaluate(`(()=>{const input=document.querySelector('#work-inbox');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(input,${JSON.stringify(text)});input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+  }
+  const oneLine=(await geometry()).input.height;
+  assert.ok(oneLine<=36,'INBOX initially one line');
+  await inboxValue('Inbox first line\nSecond line\nThird line\nFourth line');
+  await until(`document.querySelector('#work-inbox').clientHeight>${oneLine+40}`,'INBOX grows');
+  await inboxValue(Array(100).fill('Long pasted content').join('\n'));
+  await until('document.querySelector("#work-inbox").scrollHeight>document.querySelector("#work-inbox").clientHeight','Long INBOX scrolls');
+  assert.ok((await geometry()).input.height<=280);
+  checkGeometry(await geometry());
+  await inboxValue('');await until(`document.querySelector('#work-inbox').clientHeight<=${oneLine}`,'INBOX shrinks');
+
+  // Creation in the new third pane must survive a reload without moving legacy panes.
+  await click('.work-col[data-work-pane="third"] .add-row button');
+  await until('!!document.querySelector(".write-row textarea")');
+  await send('Input.insertText',{text:'Third pane task'});
+  await send('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter'});
+  await send('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter'});
+  await until('Array.from(document.querySelectorAll("[data-work-pane=third] .entry-title")).some(node=>node.textContent==="Third pane task")');
+  await send('Page.reload');await until('!!document.querySelector(".board")');
+  await until('Array.from(document.querySelectorAll("[data-work-pane=third] .entry-title")).some(node=>node.textContent==="Third pane task")');
+  assert.equal(await evaluate(`document.querySelector(${JSON.stringify(row(ids.parent))}).closest('[data-work-pane]').dataset.workPane`),'left');
+  assert.equal(await evaluate(`document.querySelector(${JSON.stringify(row(ids.weekly))}).closest('[data-work-pane]').dataset.workPane`),'right');
+  await screenshot('desktop-layout');
 
   // Real clipboard events exercise both choices without calling application internals.
   await click(row(ids.sibling)+' .entry-body');await until('!!document.querySelector(".write-row textarea")');
@@ -119,16 +172,45 @@ try{
   await send('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape'});await until('!document.querySelector(".drag-caption")');
   await send('Input.dispatchMouseEvent',{type:'mouseReleased',x:points.x,y:points.top+points.height*.9,button:'left',clickCount:1});
 
+  const crossPane=await evaluate(`(()=>{const source=document.querySelector(${JSON.stringify(row(ids.sibling)+' .drag-handle')}).getBoundingClientRect();const target=document.querySelector('[data-work-pane="third"]').getBoundingClientRect();return {x:source.x+8,y:source.y+8,tx:target.x+80,ty:target.bottom-65};})()`);
+  await send('Input.dispatchMouseEvent',{type:'mousePressed',x:crossPane.x,y:crossPane.y,button:'left',clickCount:1});
+  await send('Input.dispatchMouseEvent',{type:'mouseMoved',x:crossPane.tx,y:crossPane.ty,buttons:1});
+  await until('!!document.querySelector("[data-work-pane=third].is-end-drop")','Drop into third pane');
+  await send('Input.dispatchMouseEvent',{type:'mouseReleased',x:crossPane.tx,y:crossPane.ty,button:'left',clickCount:1});
+  await until(`document.querySelector(${JSON.stringify(row(ids.sibling))})?.closest('[data-work-pane]')?.dataset.workPane==='third'`,'Third pane drag saved');
+
   await send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
   await send('Emulation.setTouchEmulationEnabled',{enabled:true});
-  await click('.select-mode-trigger');await until('!!document.querySelector(".selection-bar")');
-  await screenshot('mobile-selection');
-  assert.ok(await evaluate('document.querySelector(".selection-bar").getBoundingClientRect().right<=window.innerWidth'));
-  await button('退出多选');await click(row(ids.empty)+' .loop-label');
+  checkGeometry(await geometry());
+  await inboxValue('Mobile wrapped content '.repeat(30));
+  await until('document.querySelector("#work-inbox").clientHeight>60','Mobile INBOX wraps');
+  checkGeometry(await geometry());await screenshot('mobile-layout');
+  await inboxValue('');
+  await click(row(ids.empty)+' .loop-label');
   await until('document.querySelector("dialog[open]")?.textContent.includes("还没有完成记录")','empty history');
   assert.ok(await evaluate('document.querySelector("dialog[open]").getBoundingClientRect().right<=window.innerWidth'));
+  await click('dialog[open] [aria-label="关闭"]');
+  await send('Emulation.setDeviceMetricsOverride',{width:768,height:1024,deviceScaleFactor:1,mobile:false});
+  checkGeometry(await geometry());
+  await evaluate(`(async()=>{
+    for(const [domain,workPane] of [['Work','left'],['Work','right'],['Work','third'],['Daily',''],['Life',''],['Glean & Idea','']]){
+      const response=await fetch('/api/entries/import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({domain,workPane,text:Array.from({length:35},(_,i)=>domain+' scroll '+i).join('\\n')})});
+      if(!response.ok)throw Error('Scroll fixture failed');
+    }
+  })()`);
+  await send('Page.reload');await until('document.querySelectorAll(".entry").length>200');
+  checkGeometry(await geometry());
+  const scrolls=await evaluate(`(()=>{
+    const nodes=[...document.querySelectorAll('.work-col-scroll,.side-board .column-scroll')];
+    return nodes.map((node,index)=>{node.scrollTop=50;const result={scrollable:node.scrollHeight>node.clientHeight,moved:node.scrollTop===50,independent:nodes.every((other,i)=>i===index||other.scrollTop===0)};node.scrollTop=0;return result;});
+  })()`);
+  assert.equal(scrolls.length,6);assert.ok(scrolls.every(value=>value.scrollable&&value.moved&&value.independent),'All six lists scroll independently');
+  await evaluate(`document.querySelector('[data-work-pane="third"] .work-col-scroll').scrollTop=90`);
+  await until('JSON.parse(localStorage.getItem("rafa-work-scroll"))?.third===90','Third pane scroll saved');
+  await send('Page.reload');
+  await until('document.querySelector("[data-work-pane=third] .work-col-scroll")?.scrollTop===90','Third pane scroll restored');
   assert.deepEqual(errors,[],'Browser runtime errors');
-  console.log('PASS: desktop/mobile collapse, loop records, multi-select movement, multiline paste choices, drop intent and cancellation');
+  console.log('PASS: desktop/mobile layout, divider dragging and persistence, third pane creation, INBOX autosizing, collapse, loop records, multiline paste and drop feedback');
 }finally{
   ws?.close();
   for(const child of [browser,app])if(child&&child.exitCode===null){const exited=new Promise(resolve=>child.once('exit',resolve));child.kill();await Promise.race([exited,pause(3000)]);}

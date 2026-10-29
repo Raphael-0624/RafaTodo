@@ -51,16 +51,3 @@ export function LoopHistoryDialog({item,onClose}){
     </div>
   </TaskDialog>;
 }
-
-export function SelectionBar({count,busy,destination,onDestination,onAction,onClear,onSelectVisible,onExit}){
-  return <div className="selection-bar" role="region" aria-label="批量操作">
-    <strong aria-live="polite">已选 {count} 项</strong>
-    <button disabled={busy} onClick={onSelectVisible}>全选可见任务</button><button disabled={busy||!count} onClick={onClear}>清空</button>
-    <span className="selection-divider"/>
-    <button disabled={busy||!count} onClick={()=>onAction('done')}>完成</button>
-    <button disabled={busy||!count} onClick={()=>onAction('removed')}>取消任务</button>
-    <select aria-label="批量移动到" value={destination} disabled={busy} onChange={event=>onDestination(event.target.value)}><option value="">移动到…</option><option value="Work:left">WORK 左栏</option><option value="Work:right">WORK 右栏</option><option value="Daily">DAILY</option><option value="Life">LIFE</option><option value="Glean & Idea">GLEAN & IDEA</option></select>
-    <button disabled={busy||!count||!destination} onClick={()=>onAction('move')}>移动</button>
-    <button className="selection-exit" disabled={busy} onClick={onExit}>退出多选</button>
-  </div>;
-}

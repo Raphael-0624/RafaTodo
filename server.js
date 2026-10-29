@@ -673,7 +673,7 @@ app.post('/api/entries/import', (req, res) => {
       if (replaceId && (!replaced || replaced.archivedAt || replaced.domain !== domain)) throw new Error('原任务已不存在，请先保留原文');
       const actualParentId = replaced ? replaced.parentId || '' : target ? target.parentId || '' : parentId;
       const panes = entryUtils.workPaneMap(existing);
-      const pane = domain === 'Work' ? panes.get(replaced?.id || target?.id || parent?.id) || (workPane === 'right' ? 'right' : 'left') : '';
+      const pane = domain === 'Work' ? panes.get(replaced?.id || target?.id || parent?.id) || entryUtils.validWorkPane(workPane) : '';
       let cursor = targetId;
       const now = new Date().toISOString();
       for (const line of lines) {

@@ -1,9 +1,10 @@
 import React,{useState,useEffect,useLayoutEffect,useRef} from 'react';
 import {createRoot} from 'react-dom/client';
 import {Plus,ArrowUpRight,Check,TextT,LinkSimple,ImageSquare,DotsSixVertical,DotsThree,X,Trash,ArrowCounterClockwise,CaretDown,CaretRight,ChartBar,Archive,PushPin,MagicWand} from '@phosphor-icons/react';
-import {domains,parseLine,toLine,treeRows,workPaneMap,pasteLink} from './lib/entries.js';
-import {selectedSubtrees,dropPlacement,pastedLines} from './lib/interactions.js';
-import {TaskDialog,LoopHistoryDialog,SelectionBar} from './components/TaskDialogs.jsx';
+import {domains,parseLine,toLine,treeRows,workPaneMap,pasteLink,workPanes,workPaneName,validWorkPane} from './lib/entries.js';
+import {dropPlacement,pastedLines} from './lib/interactions.js';
+import {TaskDialog,LoopHistoryDialog} from './components/TaskDialogs.jsx';
+import {normalizeLayout,moveDivider,dividerBounds,defaultLayout} from './lib/layout.js';
 import './style.css';
 
 function newId(){
@@ -31,14 +32,7 @@ function previewType(value){
   return 'todo';
 }
 const prefersReducedMotion=()=>window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-const clamp=value=>Math.min(75,Math.max(25,value));
-const sideLayout=width=>width>=900?'three':width>=660?'two':'stacked';
-const sideHeight=(value,fallback)=>Math.min(70,Math.max(10,Number(value)||fallback));
-function layoutFromSide(daily,life){
-  const d=sideHeight(daily,22),total=Math.min(90,d+sideHeight(life,38));
-  return {daily:d,life:total-d,total};
-}
-function readLayout(){try{const value=JSON.parse(localStorage.getItem('rafa-layout'));const sides=layoutFromSide(value?.daily,value?.life);return {work:clamp(Number(value?.work)||50),...sides,workSplit:Math.min(80,Math.max(20,Number(value?.workSplit)||50))};}catch{return {work:50,...layoutFromSide(22,38),workSplit:50};}}
+function readLayout(){try{return normalizeLayout(JSON.parse(localStorage.getItem('rafa-layout-v2')));}catch{return normalizeLayout();}}
 const dayKey=value=>{const date=new Date(value);return Number.isNaN(date.getTime())?'':date.toLocaleDateString('en-CA');};
 function readStored(key,fallback){try{const value=localStorage.getItem(key);return value===null?fallback:JSON.parse(value);}catch{return fallback;}}
 function buildIndexes(items){
@@ -49,7 +43,7 @@ function buildIndexes(items){
   return {byId,childrenByParent,descendants,workRows,workPanes};
 }
 function localEndPosition(entries,item){
-  const panes=item.domain==='Work'?workPaneMap(entries):null,pane=item.workPane==='right'?'right':'left';
+  const panes=item.domain==='Work'?workPaneMap(entries):null,pane=validWorkPane(item.workPane);
   const siblings=entries.filter(entry=>entry.domain===item.domain&&(entry.parentId||'')===(item.parentId||'')&&(item.domain!=='Work'||(panes.get(entry.id)||'left')===pane));
   return Math.max(-1,...siblings.map(entry=>Number.isFinite(entry.position)?entry.position:-1))+1;
 }
@@ -254,23 +248,27 @@ function App(){
   const [heatmapOpen,setHeatmapOpen]=useState(false);
   const [archiveOpen,setArchiveOpen]=useState(false),[archived,setArchived]=useState([]),[archiveBusy,setArchiveBusy]=useState(false);
   const [loopHistory,setLoopHistory]=useState(null);
-  const [selectMode,setSelectMode]=useState(false),[selected,setSelected]=useState(()=>new Set()),[batchBusy,setBatchBusy]=useState(false),[batchReview,setBatchReview]=useState(''),[batchDestination,setBatchDestination]=useState('');
   const [pasteChoice,setPasteChoice]=useState(null),[pasteBusy,setPasteBusy]=useState(false);
-  const batchLock=useRef(false),pasteLock=useRef(false);
+  const pasteLock=useRef(false);
   const [zen,setZen]=useState(null),[zenNow,setZenNow]=useState(Date.now()),[zenConfirm,setZenConfirm]=useState('');
   const [inboxText,setInboxText]=useState(()=>readStored('rafa-inbox-text','')),[inboxBatches,setInboxBatches]=useState(()=>readStored('rafa-inbox-batches',[])),[inboxBusy,setInboxBusy]=useState(false),[inboxAdopting,setInboxAdopting]=useState(''),[inboxPhase,setInboxPhase]=useState(''),[inboxOpen,setInboxOpen]=useState(false);
   const autoProcessed=useRef(readStored('rafa-inbox-auto-source',''));
   const [layout,setLayout]=useState(readLayout);
-  const [boardWidth,setBoardWidth]=useState(0);
-  const board=useRef(null),beforePositions=useRef(null),workScrollRefs=useRef({left:null,right:null}),scrollSaveFrame=useRef(0),scrollRestored=useRef(false);
+  const board=useRef(null),lowerBoard=useRef(null),inboxInput=useRef(null),resizeCleanup=useRef(null),beforePositions=useRef(null),workScrollRefs=useRef({left:null,right:null,third:null}),scrollSaveFrame=useRef(0),scrollRestored=useRef(false);
   useLayoutEffect(()=>{
-    const node=board.current;if(!node)return;
-    const measure=()=>setBoardWidth(node.clientWidth);
-    measure();
-    const observer=new ResizeObserver(measure);observer.observe(node);
-    window.addEventListener('resize',measure);
-    return ()=>{observer.disconnect();window.removeEventListener('resize',measure);};
-  },[authenticated,loading]);
+    const input=inboxInput.current;if(!input)return;
+    const measure=()=>{
+      input.style.height='0px';
+      const max=Math.max(34,Math.floor(window.innerHeight*.28));
+      const height=Math.min(max,Math.max(34,input.scrollHeight));
+      input.style.height=height+'px';input.style.overflowY=input.scrollHeight>height?'auto':'hidden';
+    };
+    measure();let width=input.clientWidth;
+    const observer=new ResizeObserver(()=>{if(input.clientWidth!==width){width=input.clientWidth;measure();}});
+    observer.observe(input);window.addEventListener('resize',measure);
+    return()=>{observer.disconnect();window.removeEventListener('resize',measure);};
+  },[inboxText,authenticated,loading]);
+  useEffect(()=>()=>resizeCleanup.current?.(),[]);
   useLayoutEffect(()=>{
     const previous=beforePositions.current;beforePositions.current=null;
     if(!previous||prefersReducedMotion())return;
@@ -281,7 +279,6 @@ function App(){
     }
   },[items]);
   const byId=indexes.byId,descendantsOf=indexes.descendants;
-  const sideWidth=boardWidth*(1-layout.work/100),rightLayout=sideLayout(sideWidth);
   function applyItems(next,{animate=true}={}){
     beforePositions.current=animate&&!prefersReducedMotion()?new Map([...board.current?.querySelectorAll('[data-entry-id]')||[]].map(node=>[node.dataset.entryId,node.getBoundingClientRect()])):null;
     itemsRef.current=next;
@@ -309,10 +306,10 @@ function App(){
     if(!prefersReducedMotion())setTimeout(()=>{const read=node.querySelector('.entry-read');if(read)read.animate([{backgroundColor:'#c9e3c6'},{backgroundColor:getComputedStyle(read).backgroundColor}],{duration:1100,easing:'ease-out'});},300);
   }
 
-  useEffect(()=>{try{localStorage.setItem('rafa-layout',JSON.stringify(layout));}catch{}},[layout]);
+  useEffect(()=>{try{localStorage.setItem('rafa-layout-v2',JSON.stringify(layout));}catch{}},[layout]);
   useEffect(()=>{
     if(!authenticated)return;
-    const refresh=()=>{if(document.visibilityState!=='visible'||saving.current.size||batchLock.current||pasteLock.current)return;api('/api/entries').then(entries=>{if(saving.current.size||batchLock.current||pasteLock.current)return;itemsRef.current=entries;setItems(entries);}).catch(()=>{});};
+    const refresh=()=>{if(document.visibilityState!=='visible'||saving.current.size||pasteLock.current)return;api('/api/entries').then(entries=>{if(saving.current.size||pasteLock.current)return;itemsRef.current=entries;setItems(entries);}).catch(()=>{});};
     const timer=setInterval(refresh,30000);
     window.addEventListener('focus',refresh);document.addEventListener('visibilitychange',refresh);
     return ()=>{clearInterval(timer);window.removeEventListener('focus',refresh);document.removeEventListener('visibilitychange',refresh);};
@@ -321,7 +318,7 @@ function App(){
     if(!entriesLoaded||scrollRestored.current)return;
     scrollRestored.current=true;
     const saved=readStored('rafa-work-scroll',{})||{};
-    for(const pane of ['left','right'])requestAnimationFrame(()=>{const node=workScrollRefs.current[pane];if(node&&Number.isFinite(saved[pane]))node.scrollTop=saved[pane];});
+    for(const pane of workPanes)requestAnimationFrame(()=>{const node=workScrollRefs.current[pane];if(node&&Number.isFinite(saved[pane]))node.scrollTop=saved[pane];});
   },[entriesLoaded]);
   useEffect(()=>()=>{cancelAnimationFrame(scrollSaveFrame.current);},[]);
   useEffect(()=>{try{localStorage.setItem('rafa-inbox-text',JSON.stringify(inboxText));}catch{}},[inboxText]);
@@ -369,40 +366,6 @@ function App(){
   useEffect(()=>{const closeTransient=event=>{if(!event.target.closest('.context-menu,.row-actions'))setMenu(null);if(!event.target.closest('.row-actions,.context-menu'))setConfirmDelete('');if(!event.target.closest('.column-archive'))setConfirmArchive('');};document.addEventListener('pointerdown',closeTransient);return()=>document.removeEventListener('pointerdown',closeTransient);},[]);
   async function archiveDomain(domain){if(archiveBusy)return;if(confirmArchive!==domain){setConfirmArchive(domain);return;}setConfirmArchive('');setArchiveBusy(true);setError('');try{const result=await api('/api/archive','POST',{domain});itemsRef.current=result.items;setItems(result.items);setArchived(await api('/api/archive'));setError(result.count?`已归档 ${result.count} 条`:'没有可归档的内容');}catch(e){setError(e.message);}finally{setArchiveBusy(false);}}
   async function openArchive(){setArchiveOpen(true);try{setArchived(await api('/api/archive'));}catch(e){setError(e.message);}}
-  async function toggleSelectMode(){
-    if(batchBusy||pasteBusy)return;
-    if(!selectMode&&draft&&!await save())return;
-    setSelectMode(!selectMode);setSelected(new Set());setMenu(null);setBatchReview('');
-  }
-  function toggleSelected(id){
-    if(batchBusy)return;
-    setBatchReview('');
-    setSelected(previous=>{const next=new Set(previous);if(next.has(id))next.delete(id);else if(next.size<200)next.add(id);return next;});
-  }
-  function selectVisibleTasks(){
-    const visible=[...board.current.querySelectorAll('[data-entry-id]')].map(node=>node.dataset.entryId).filter(id=>byId.get(id)?.type==='todo');
-    setSelected(new Set(visible.slice(0,200)));setBatchReview('');
-    if(visible.length>200)setError('一次最多选择 200 个任务，已选前 200 项');
-  }
-  useEffect(()=>{
-    setSelected(previous=>{const next=new Set([...previous].filter(id=>items.some(item=>item.id===id&&item.type==='todo')));return next.size===previous.size?previous:next;});
-  },[items]);
-  useEffect(()=>{
-    if(!selectMode)return;
-    const escape=event=>{if(event.key==='Escape'&&!batchLock.current&&!batchReview){setSelectMode(false);setSelected(new Set());}};
-    document.addEventListener('keydown',escape);return()=>document.removeEventListener('keydown',escape);
-  },[selectMode,batchReview]);
-  async function runBatch(){
-    if(batchLock.current||!selected.size||!batchReview)return;
-    batchLock.current=true;setBatchBusy(true);setError('');
-    const [domain,workPane]=batchDestination.split(':');
-    try{
-      const result=await api('/api/entries/batch','POST',{ids:[...selected],action:batchReview,domain,workPane});
-      applyItems(result.items);setSelected(new Set());setSelectMode(false);setBatchReview('');
-      setError(`已${batchReview==='move'?'移动':batchReview==='done'?'完成':'取消'} ${result.count} 个任务`);
-    }catch(error){setError(error.message);}
-    finally{batchLock.current=false;setBatchBusy(false);}
-  }
   async function splitPaste(){
     if(pasteLock.current||!pasteChoice||!draftRef.current)return;
     pasteLock.current=true;setPasteBusy(true);setError('');
@@ -482,7 +445,7 @@ function App(){
     if(draft&&!await save())return;
     const parent=itemsRef.current.find(entry=>entry.id===parentId);
     if(parent?.collapsed){try{replaceItem(await api('/api/entries/'+parent.id,'PUT',{...parent,collapsed:false}));}catch(error){setError(error.message);return;}}
-    const value=item||{domain,title:'',content:'',type:'todo',status:'open',parentId,workPane:domain==='Work'?pane||'left':''};
+    const value=item||{domain,title:'',content:'',type:'todo',status:'open',parentId,workPane:domain==='Work'?pane||indexes.workPanes.get(parentId)||'left':''};
     const seed=item?editLine(item,items):'';editorTextRef.current=seed;setDraft({...value,editorSeed:seed,editorKey:newId()});setError('');
   }
   async function insertNear(item,placement,type){setMenu(null);if(draft&&!await save())return;const prefix=type==='group'?'## ':type==='text'?'> ':'';editorTextRef.current=prefix;setDraft({domain:item.domain,type,status:'open',title:'',content:'',parentId:item.parentId||'',workPane:item.workPane||'',insert:{targetId:item.id,placement},editorSeed:prefix,editorKey:newId()});}
@@ -537,35 +500,39 @@ function App(){
       applyItems(next);
     }catch(e){setError(e.message);}finally{markPending(item.id,false);}
   }
-  function resize(event,kind){
+  function resize(event,axis){
     if(event.button!==0)return;
-    event.preventDefault();
-    const handle=event.currentTarget,rect=(kind==='workSplit'?handle.parentElement:board.current).getBoundingClientRect();
+    event.preventDefault();resizeCleanup.current?.();
+    const horizontal=axis==='workHeight',node=horizontal?board.current:lowerBoard.current;
+    const rect=node.getBoundingClientRect(),handle=event.currentTarget;
     try{handle.setPointerCapture(event.pointerId);}catch{}
     const move=event=>{
-      if(kind==='daily'||kind==='life'){
-        const value=(event.clientY-rect.top)/rect.height*100,daily=kind==='daily'?value:layout.total-value;
-        setLayout(previous=>{
-          const d=Math.min(Math.max(10,daily),previous.total-10);
-          return {...previous,daily:d,life:previous.total-d};
-        });
-        return;
-      }
-      const value=kind==='workSplit'?(event.clientX-rect.left)/rect.width*100:(event.clientX-rect.left)/rect.width*100;
-      setLayout(previous=>({...previous,[kind]:kind==='workSplit'?Math.min(80,Math.max(20,value)):clamp(value)}));
+      const value=horizontal?(event.clientY-rect.top-4)/Math.max(1,rect.height-8)*100:(event.clientX-rect.left)/Math.max(1,rect.width)*100;
+      setLayout(previous=>moveDivider(previous,axis,value));
     };
-    const finish=()=>{window.removeEventListener('pointermove',move);window.removeEventListener('pointerup',finish);window.removeEventListener('pointercancel',finish);document.body.classList.remove('is-resizing');};
+    const finish=()=>{
+      window.removeEventListener('pointermove',move);window.removeEventListener('pointerup',finish);window.removeEventListener('pointercancel',finish);
+      document.body.classList.remove('is-resizing');resizeCleanup.current=null;
+    };
+    resizeCleanup.current=finish;
     window.addEventListener('pointermove',move);window.addEventListener('pointerup',finish);window.addEventListener('pointercancel',finish);document.body.classList.add('is-resizing');
   }
-  function divider(axis){const side=axis==='daily'||axis==='life';const value=side?(axis==='daily'?layout.daily:layout.total-layout.daily):layout[axis],min=side?10:25,max=side?layout.total-10:75,amount=2;return <div className={'divider divider-'+axis} role="separator" tabIndex={0} aria-label={axis==='work'?'调整 WORK 宽度':axis==='daily'?'调整 DAILY 高度':'调整 LIFE 高度'} aria-orientation={axis==='work'?'vertical':'horizontal'} aria-valuemin={min} aria-valuemax={max} aria-valuenow={Math.round(value)} onPointerDown={event=>resize(event,axis)} onKeyDown={event=>{if(!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home'].includes(event.key))return;event.preventDefault();const direction=event.key==='Home'?0:(['ArrowLeft','ArrowUp'].includes(event.key)?-1:1);setLayout(previous=>{if(side){const current=axis==='daily'?previous.daily:previous.total-previous.daily;const next=direction===0?(axis==='daily'?22:38):current+direction*amount;const d=axis==='daily'?Math.min(Math.max(10,next),previous.total-10):previous.total-Math.min(Math.max(10,next),previous.total-10);return {...previous,daily:d,life:previous.total-d};}return {...previous,[axis]:direction===0?50:clamp(previous[axis]+direction*amount)};});}}/>;}
-  function workDivider(){return <div className="divider divider-worksplit" role="separator" tabIndex={0} aria-label="调整 WORK 左右栏宽度" aria-orientation="vertical" aria-valuemin={20} aria-valuemax={80} aria-valuenow={Math.round(layout.workSplit)} onPointerDown={event=>resize(event,'workSplit')} onKeyDown={event=>{if(['ArrowLeft','ArrowRight','Home'].includes(event.key)){event.preventDefault();setLayout(previous=>({...previous,workSplit:event.key==='Home'?50:Math.min(80,Math.max(20,previous.workSplit+(event.key==='ArrowLeft'?-2:2)))}));}}}/>;}
+  function divider(axis){
+    const horizontal=axis==='workHeight',value=layout[axis],{min,max}=dividerBounds(layout,axis);
+    const label=horizontal?'调整 WORK 与下方栏目的高度':axis==='dailyEnd'?'调整 DAILY 与 LIFE 的宽度':'调整 LIFE 与 GLEAN & IDEA 的宽度';
+    return <div className={'layout-divider '+(horizontal?'layout-divider-horizontal':'layout-divider-vertical')} style={horizontal?undefined:{left:value+'%'}} role="separator" tabIndex={0} aria-label={label} aria-orientation={horizontal?'horizontal':'vertical'} aria-valuemin={Math.round(min)} aria-valuemax={Math.round(max)} aria-valuenow={Math.round(value)} onPointerDown={event=>resize(event,axis)} onKeyDown={event=>{
+      if(!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home'].includes(event.key))return;
+      event.preventDefault();
+      setLayout(previous=>moveDivider(previous,axis,event.key==='Home'?defaultLayout[axis]:previous[axis]+(['ArrowLeft','ArrowUp'].includes(event.key)?-2:2)));
+    }}/>;
+  }
   async function move(spec){
     if(pending.has('move'))return;
     markPending('move',true);setError('');
     try{applyItems(await api('/api/entries/move','POST',spec));feedback(spec.id);}catch(e){setError(e.message,()=>move(spec));}finally{markPending('move',false);}
   }
   function beginDrag(event,item){
-    if(selectMode||event.button!==0||pending.has('move'))return;
+    if(event.button!==0||pending.has('move'))return;
     drag.current?.cleanup?.();
     const blocked=descendantsOf(item.id);blocked.add(item.id);
     const start={x:event.clientX,y:event.clientY},state={id:item.id,active:false};
@@ -595,7 +562,7 @@ function App(){
         }else if(!next)next={id:item.id,domain,workPane:pane,placement:'end'};
       }
       if(next&&blocked.has(next.targetId))next=null;
-      if(node?.closest('.column-head,.pinned-list,.inbox-wrap,.divider'))next=null;
+      if(node?.closest('.column-head,.pinned-list,.inbox-wrap,.layout-divider'))next=null;
       currentDrop.current=next;setDrop(next);scrollNode=null;scrollSpeed=0;
       if(column){
         const workColumn=node?.closest('[data-work-pane]'),scroller=workColumn?.querySelector('.work-col-scroll')||column.querySelector('.column-scroll'),box=scroller?.getBoundingClientRect();
@@ -664,14 +631,14 @@ function App(){
     const tasks=items.filter(entry=>entry.id!==item.id&&descendants.has(entry.id)&&entry.type==='todo'&&entry.status!=='removed');
     const target=drop?.targetId===item.id?drop.placement:'';
     const timeTitle=[['createdAt','创建'],['updatedAt','更新'],['completedAt','完成'],['removedAt','移除']].filter(([key])=>item[key]).map(([key,name])=>name+'：'+new Date(item[key]).toLocaleString('zh-CN',{hour12:false})).join('\n');
-    return <div key={item.id} className={'entry '+(done?'is-done ':'')+(removed?'is-removed ':'')+(group?'is-group ':'')+(divider?'is-divider ':'')+(item.url?'has-link ':'')+(item.pinnedAt?'is-pinned ':'')+(dragging===item.id?'drag-source ':'')+(target?'drop-'+target:'')+(selected.has(item.id)?' is-selected':'')} data-entry-id={item.id} data-depth={depth} style={{'--depth':depth}} onClickCapture={event=>{if(!selectMode||event.target.closest('.group-toggle'))return;event.preventDefault();event.stopPropagation();if(item.type==='todo')toggleSelected(item.id);}} onKeyDownCapture={event=>{if(selectMode&&['Enter',' '].includes(event.key)&&!event.target.closest('.group-toggle')){event.preventDefault();event.stopPropagation();if(item.type==='todo')toggleSelected(item.id);}}} onPointerDown={event=>{if(event.target.closest('button,a,textarea,input,.row-actions,.group-controls,.group-picker'))return;beginDrag(event,item);}} onClick={event=>{if(event.target.closest('button,a,textarea,.entry-body,.row-actions,.group-controls,.group-picker')||editing)return;open(item);}} onContextMenu={event=>{if(selectMode||event.target.closest('textarea'))return;event.preventDefault();setMenu({x:event.clientX, y:event.clientY,item});}}>
+    return <div key={item.id} className={'entry '+(done?'is-done ':'')+(removed?'is-removed ':'')+(group?'is-group ':'')+(divider?'is-divider ':'')+(item.url?'has-link ':'')+(item.pinnedAt?'is-pinned ':'')+(dragging===item.id?'drag-source ':'')+(target?'drop-'+target:'')} data-entry-id={item.id} data-depth={depth} style={{'--depth':depth}} onPointerDown={event=>{if(event.target.closest('button,a,textarea,input,.row-actions,.group-controls,.group-picker'))return;beginDrag(event,item);}} onClick={event=>{if(event.target.closest('button,a,textarea,.entry-body,.row-actions,.group-controls,.group-picker')||editing)return;open(item);}} onContextMenu={event=>{if(event.target.closest('textarea'))return;event.preventDefault();setMenu({x:event.clientX, y:event.clientY,item});}}>
       {target&&<span className="drop-placement-note" aria-hidden="true">{target==='inside'?'缩进为子条目':target==='before'?'同级 · 插到前面':'同级 · 插到整组后面'}</span>}
       <button className="drag-handle" title="拖动排序；中部缩进，边缘同级插入" aria-label={'拖动 '+titleOf(item)} onPointerDown={event=>{event.stopPropagation();beginDrag(event,item);}}><DotsSixVertical size={14}/></button>
       {editing?editor():<div className="entry-read">
         {!group&&descendants.size>0&&<button className={'group-toggle task-toggle '+(item.collapsed?'collapsed':'')} aria-label={(item.collapsed?'展开':'收起')+descendants.size+' 个子条目'} aria-expanded={!item.collapsed} disabled={pending.has(item.id)} onClick={()=>configureGroup(item,{collapsed:!item.collapsed})}><CaretDown size={13}/></button>}
-        {group?<><button className={'group-toggle '+(item.collapsed?'collapsed':'')} aria-label={item.collapsed?'展开分组':'收起分组'} aria-expanded={!item.collapsed} onClick={()=>configureGroup(item,{collapsed:!item.collapsed})}><CaretDown size={15}/></button><button className="group-signature" title="选择分组图标和底色" onClick={()=>setPicker(picker===item.id?'':item.id)}>{item.signature||'🌿'}</button>{picker===item.id&&<div className="group-picker"><div>{['🌿','📌','📝','🚀','💡','🏠','💼'].map(signature=><button key={signature} aria-label={'图标 '+signature} onClick={()=>{configureGroup(item,{signature});setPicker('');}}>{signature}</button>)}</div><div>{['sage','sand','blue','rose','none'].map(tone=><button className={'tone-swatch tone-'+tone} key={tone} aria-label={'底色 '+tone} onClick={()=>{configureGroup(item,{tone});setPicker('');}}/>)}</div></div>}</>:divider?<span className="kind-mark">—</span>:selectMode&&item.type==='todo'?<button className={'selection-check '+(selected.has(item.id)?'checked':'')} role="checkbox" aria-checked={selected.has(item.id)} aria-label={'选择 '+titleOf(item)} disabled={batchBusy}>{selected.has(item.id)&&<Check size={11}/>}</button>:item.type==='todo'?<button className={'checkbox '+(done?'checked':'')} aria-label={done?'重新打开任务':'完成任务'} onClick={()=>updateStatus(item)} disabled={pending.has(item.id)}>{done&&<Check size={11} weight="bold"/>}{removed&&<span>−</span>}</button>:<span className="kind-mark">{item.type==='text'?<TextT size={15}/>:item.type==='link'?<LinkSimple size={15}/>:item.type==='bullet'?<span>•</span>:<ImageSquare size={15}/>}</span>}
-        <div className={'entry-body '+(item.url?'linked-body':'')} title={timeTitle} role="button" tabIndex={0} onClick={event=>{if(event.target.closest('a'))return;open(item);}} onKeyDown={event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();open(item);}}} aria-label={(selectMode?'选择 ':'编辑 ')+titleOf(item)}>
-          <EntryContent item={item} items={items} onLoopHistory={selectMode?undefined:setLoopHistory}/>
+        {group?<><button className={'group-toggle '+(item.collapsed?'collapsed':'')} aria-label={item.collapsed?'展开分组':'收起分组'} aria-expanded={!item.collapsed} onClick={()=>configureGroup(item,{collapsed:!item.collapsed})}><CaretDown size={15}/></button><button className="group-signature" title="选择分组图标和底色" onClick={()=>setPicker(picker===item.id?'':item.id)}>{item.signature||'🌿'}</button>{picker===item.id&&<div className="group-picker"><div>{['🌿','📌','📝','🚀','💡','🏠','💼'].map(signature=><button key={signature} aria-label={'图标 '+signature} onClick={()=>{configureGroup(item,{signature});setPicker('');}}>{signature}</button>)}</div><div>{['sage','sand','blue','rose','none'].map(tone=><button className={'tone-swatch tone-'+tone} key={tone} aria-label={'底色 '+tone} onClick={()=>{configureGroup(item,{tone});setPicker('');}}/>)}</div></div>}</>:divider?<span className="kind-mark">—</span>:item.type==='todo'?<button className={'checkbox '+(done?'checked':'')} aria-label={done?'重新打开任务':'完成任务'} onClick={()=>updateStatus(item)} disabled={pending.has(item.id)}>{done&&<Check size={11} weight="bold"/>}{removed&&<span>−</span>}</button>:<span className="kind-mark">{item.type==='text'?<TextT size={15}/>:item.type==='link'?<LinkSimple size={15}/>:item.type==='bullet'?<span>•</span>:<ImageSquare size={15}/>}</span>}
+        <div className={'entry-body '+(item.url?'linked-body':'')} title={timeTitle} role="button" tabIndex={0} onClick={event=>{if(event.target.closest('a'))return;open(item);}} onKeyDown={event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();open(item);}}} aria-label={'编辑 '+titleOf(item)}>
+          <EntryContent item={item} items={items} onLoopHistory={setLoopHistory}/>
         </div>
         {group&&<div className="group-controls"><span className="group-count" title="已完成 / 总任务数（不含取消）">{tasks.filter(task=>task.status==='done').length}/{tasks.length}</span><button title="在分组内写一条" aria-label="在分组内新增条目" onClick={()=>open(null,item.domain,item.id)}><Plus size={14}/></button>
 
@@ -700,23 +667,23 @@ function App(){
   }
   function workAddRow(pane){
     const active=draft&&!draft.id&&!draft.insert&&!draft.parentId&&draft.domain==='Work'&&(draft.workPane||'left')===pane;
-    return <div className="add-row">{active?editor():<button onClick={()=>open(null,'Work','',pane)} aria-label={'在 WORK '+pane+' 栏新增条目'}><Plus size={14}/><span>写一条…</span></button>}</div>;
+    return <div className="add-row">{active?editor():<button onClick={()=>open(null,'Work','',pane)} aria-label={'在 WORK '+workPaneName(pane)+'新增条目'}><Plus size={14}/><span>写一条…</span></button>}</div>;
   }
   function saveWorkScroll(){
     cancelAnimationFrame(scrollSaveFrame.current);
     scrollSaveFrame.current=requestAnimationFrame(()=>{
       const value={};
-      for(const pane of ['left','right']){const node=workScrollRefs.current[pane];if(node)value[pane]=node.scrollTop;}
+      for(const pane of workPanes){const node=workScrollRefs.current[pane];if(node)value[pane]=node.scrollTop;}
       try{localStorage.setItem('rafa-work-scroll',JSON.stringify(value));}catch{}
     });
   }
   function workPane(pane){
     const endDrop=drop?.domain==='Work'&&drop.placement==='end'&&(drop.workPane||'left')===pane;
-    return <div className={'work-col '+(endDrop?'is-end-drop':'')} data-work-pane={pane} onDragOver={event=>{if(event.dataTransfer.types.includes('Files'))event.preventDefault();}} onDrop={event=>{const file=Array.from(event.dataTransfer.files).find(file=>file.type.startsWith('image/'));if(file){event.preventDefault();upload(file,{domain:'Work',type:'image',parentId:'',workPane:pane});}}}>
+    return <div className={'work-col '+(endDrop?'is-end-drop':'')} key={pane} data-work-pane={pane} aria-label={'WORK '+workPaneName(pane)} onDragOver={event=>{if(event.dataTransfer.types.includes('Files'))event.preventDefault();}} onDrop={event=>{const file=Array.from(event.dataTransfer.files).find(file=>file.type.startsWith('image/'));if(file){event.preventDefault();upload(file,{domain:'Work',type:'image',parentId:'',workPane:pane});}}}>
       <div className="work-col-scroll" ref={node=>{workScrollRefs.current[pane]=node;}} onScroll={saveWorkScroll}>
         <div className="column-content">{loading?<div className="loading">加载中…</div>:renderTree('Work',pane)}</div>
         {workAddRow(pane)}
-        {dragging&&endDrop&&<div className="work-end-drop">放到{pane==='left'?'左':'右'}栏末尾</div>}
+        {dragging&&endDrop&&<div className="work-end-drop">放到{workPaneName(pane)}末尾</div>}
       </div>
     </div>;
   }
@@ -727,29 +694,36 @@ function App(){
       <div className="column-watermark" aria-hidden="true">{domain==='Glean & Idea'?<>GLEAN<span>& IDEA</span></>:domain.toUpperCase()}</div>
       <div className="column-head"><h1>{domain.toUpperCase()}</h1><span>{items.filter(item=>item.domain===domain&&item.type==='todo'&&!['done','removed'].includes(item.status)).length}</span><button className={'column-archive '+(confirmArchive===domain?'confirm-archive':'')} onClick={()=>archiveDomain(domain)} disabled={archiveBusy} aria-label={confirmArchive===domain?'确认归档':'归档 '+domain+' 已完成和已移除的内容'} title={confirmArchive===domain?'再次点击确认归档':'归档本栏'}>{confirmArchive===domain?'确认归档':<Archive size={16}/>}</button></div>
       {items.some(item=>item.domain===domain&&item.pinnedAt)&&<div className="pinned-list" aria-label={domain+' 置顶条目'}>{items.filter(item=>item.domain===domain&&item.pinnedAt).sort((a,b)=>a.pinnedAt.localeCompare(b.pinnedAt)).map(item=><div className="pinned-item" key={item.id} onContextMenu={event=>{event.preventDefault();setMenu({x:event.clientX,y:event.clientY,item});}}><PushPin size={13} weight="fill"/><button className="pinned-title" onClick={()=>locatePinned(item)} title={titleOf(item)}><span className="pinned-title-text">{inline(titleOf(item),false)}</span>{item.content&&<span className="pinned-note">{item.content.split('\n').map((line,index)=><span key={index}>{inline(line,false)}</span>)}</span>}<span className="pinned-meta">{item.priority==='urgent'?'!! 紧急':item.priority==='high'?'! 重要':''}{item.owner?' @'+item.owner:''}{item.tags?' '+item.tags.split(/[,，]\s*/).map(tag=>'#'+tag).join(' '):''}{item.dueDate?' 截止 '+item.dueDate:''}</span></button><button className="pinned-unpin" onClick={()=>togglePin(item)} aria-label={'取消置顶 '+titleOf(item)} title="取消置顶"><PushPin size={13} weight="fill"/></button></div>)}</div>}
-      {domain==='Work'?<div className="column-scroll work-scroll"><div className="work-cols" style={{'--work-split':layout.workSplit+'%'}}>{workPane('left')}{workDivider()}{workPane('right')}</div></div>:<div className="column-scroll">
+      {domain==='Work'?<div className="column-scroll work-scroll"><div className="work-cols">{workPanes.map(workPane)}</div></div>:<div className="column-scroll">
       <div className="column-content">{loading?<div className="loading">加载中…</div>:renderTree(domain)}</div>
       <div className="add-row">{draft&&!draft.id&&!draft.insert&&!draft.parentId&&draft.domain===domain?editor():<button onClick={()=>open(null,domain)} aria-label={'在 '+domain+' 新增条目'}><Plus size={14}/><span>写一条…</span></button>}</div>
-      </div>}
-      {domain==='Work'&&<div className="inbox-wrap"><div className="inbox"><div className="inbox-entry"><textarea id="work-inbox" value={inboxText} onChange={event=>setInboxText(event.target.value)} placeholder="随手记下新信息，不必整理…" aria-label="INBOX 原文"/><button className="inbox-run" onClick={()=>runInboxAI()} disabled={!inboxText.trim()||inboxBusy} title="整理为任务草稿" aria-label="AI 整理"><MagicWand size={17}/></button></div><div className="inbox-status" aria-live="polite">{inboxBusy?inboxPhase:inboxPhase||'停止输入 60 秒后自动整理'}{inboxBatches.length>0&&<button className="inbox-review" onClick={()=>setInboxOpen(value=>!value)}>{inboxOpen?'草稿预览中':`查看 AI 草稿 (${inboxBatches.reduce((sum,batch)=>sum+batch.drafts.filter(draft=>draft.decision==='pending').length,0)} 待处理)`}</button>}</div></div>
-
       </div>}
     </section>;
   }
   if(authenticated===null||loading)return <div className="auth-screen"><div className="auth-brand"><img className="auth-cat" src="/rafa-cat.png" alt=""/><div className="auth-mark">Rafa<span>todo</span><i/></div></div><span className="auth-loading">正在打开…</span><ErrorNotice message={error} retry={retryAction} onClose={()=>setError('')}/></div>;
   if(!authenticated)return <div className="auth-screen"><form className="auth-form" onSubmit={login}><div className="auth-brand"><img className="auth-cat" src="/rafa-cat.png" alt=""/><div className="auth-mark">Rafa<span>todo</span><i/></div></div><div className="auth-input"><input id="password" type="password" autoFocus autoComplete="current-password" value={password} onChange={event=>setPassword(event.target.value)} aria-label="密码" placeholder="••••••" onKeyDown={event=>{if(event.key==='Enter')login(event);}}/></div></form><ErrorNotice message={error} retry={retryAction} onClose={()=>setError('')}/></div>;
-  return <div className={'app '+(selectMode?'is-selecting':'')}>
-    <header className="topbar"><a className="brand" href="/" aria-label="RafaTodo 首页"><img className="brand-cat" src="/rafa-cat.png" alt=""/>Rafa<span>todo</span><i/></a><div className="top-tools"><button className={'select-mode-trigger '+(selectMode?'active':'')} aria-pressed={selectMode} disabled={batchBusy||pasteBusy||pending.size>0} onClick={toggleSelectMode}>{selectMode?'退出多选':'多选'}</button><button className="archive-view" onClick={openArchive} aria-label="查看归档" title="查看归档"><Archive size={18}/></button><button className={'heatmap-trigger '+(heatmapOpen?'active':'')} onClick={()=>setHeatmapOpen(value=>!value)} aria-label="打开活动热力图" title="活动热力图"><ChartBar size={18}/></button></div><Heatmap items={items} open={heatmapOpen} onClose={()=>setHeatmapOpen(false)} onLoopHistory={setLoopHistory}/><ArchiveModal open={archiveOpen} items={archived} onClose={()=>setArchiveOpen(false)} onLoopHistory={setLoopHistory}/></header>
+  return <div className="app">
+    <header className="topbar"><a className="brand" href="/" aria-label="RafaTodo 首页"><img className="brand-cat" src="/rafa-cat.png" alt=""/>Rafa<span>todo</span><i/></a><div className="top-tools"><button className="archive-view" onClick={openArchive} aria-label="查看归档" title="查看归档"><Archive size={18}/></button><button className={'heatmap-trigger '+(heatmapOpen?'active':'')} onClick={()=>setHeatmapOpen(value=>!value)} aria-label="打开活动热力图" title="活动热力图"><ChartBar size={18}/></button></div><Heatmap items={items} open={heatmapOpen} onClose={()=>setHeatmapOpen(false)} onLoopHistory={setLoopHistory}/><ArchiveModal open={archiveOpen} items={archived} onClose={()=>setArchiveOpen(false)} onLoopHistory={setLoopHistory}/></header>
     <ErrorNotice message={error} retry={retryAction} onClose={()=>setError('')}/>
-    <main ref={board} className="board" data-side-layout={rightLayout} style={{'--work':layout.work+'%','--daily':layout.daily+'%','--life':layout.life+'%','--glean':Math.max(10,100-layout.total)+'%'}}><div className="side-board">{domains.filter(domain=>domain!=='Work').map(columnSection)}</div>{columnSection('Work')}{divider('work')}{divider('daily')}{divider('life')}</main>
-    {selectMode&&<SelectionBar count={selected.size} busy={batchBusy} destination={batchDestination} onDestination={setBatchDestination} onAction={action=>{setError('');setBatchReview(action);}} onClear={()=>setSelected(new Set())} onSelectVisible={selectVisibleTasks} onExit={toggleSelectMode}/>}
-    {batchReview&&<TaskDialog title={batchReview==='move'?'确认批量移动':batchReview==='done'?'确认批量完成':'确认批量取消'} busy={batchBusy} onClose={()=>setBatchReview('')}>
-      <div className="task-dialog-body">{error&&<p className="dialog-error" role="alert">{error}</p>}<p>已选择 {selected.size} 个任务。</p>{batchReview==='move'?<p className="dialog-hint">移到 {batchDestination==='Work:left'?'WORK 左栏':batchDestination==='Work:right'?'WORK 右栏':batchDestination} 末尾。包含子条目共 {selectedSubtrees(items,[...selected]).affected.size} 项，保留层级；同时选中的父子任务不会重复移动。</p>:<p className="dialog-hint">仅{batchReview==='done'?'完成':'取消'}选中的任务，不改变未选中子任务的状态。循环任务沿用原有计数规则。</p>}<p className="dialog-hint">全部成功后生效，失败不会只处理一部分。</p></div>
-      <footer className="task-dialog-actions"><button disabled={batchBusy} onClick={()=>setBatchReview('')}>返回选择</button><button className="dialog-primary" disabled={batchBusy||!selected.size} onClick={runBatch}>{batchBusy?'处理中…':'确认'+(batchReview==='move'?'移动':batchReview==='done'?'完成':'取消任务')}</button></footer>
-    </TaskDialog>}
+    <div className="workspace">
+      <main ref={board} className="board" style={{'--work-height':layout.workHeight+'fr','--bottom-height':(100-layout.workHeight)+'fr'}}>
+        {columnSection('Work')}{divider('workHeight')}
+        <div className="side-board" ref={lowerBoard} style={{gridTemplateColumns:layout.dailyEnd+'% '+(layout.lifeEnd-layout.dailyEnd)+'% minmax(0,1fr)'}}>
+          {domains.filter(domain=>domain!=='Work').map(columnSection)}{divider('dailyEnd')}{divider('lifeEnd')}
+        </div>
+      </main>
+      <footer className="inbox-wrap" aria-label="快速收集"><div className="inbox-entry">
+        <label className="inbox-label" htmlFor="work-inbox">INBOX</label>
+        <textarea id="work-inbox" ref={inboxInput} rows="1" value={inboxText} onChange={event=>setInboxText(event.target.value)} placeholder="随手记下新信息，不必整理…" aria-label="INBOX 原文"/>
+        <div className="inbox-tools"><span className="inbox-status" aria-live="polite">{inboxPhase}</span>
+          {inboxBatches.length>0&&<button className="inbox-review" onClick={()=>setInboxOpen(value=>!value)}>草稿 {inboxBatches.reduce((sum,batch)=>sum+batch.drafts.filter(draft=>draft.decision==='pending').length,0)}</button>}
+          <button className="inbox-run" onClick={()=>runInboxAI()} disabled={!inboxText.trim()||inboxBusy} title="AI 整理（停止输入 60 秒后也会自动整理）" aria-label="AI 整理"><MagicWand size={17}/></button>
+        </div>
+      </div></footer>
+    </div>
     {loopHistory&&<LoopHistoryDialog key={loopHistory.id} item={loopHistory} onClose={()=>setLoopHistory(null)}/>}
     {pasteChoice&&<TaskDialog title="粘贴多行内容" busy={pasteBusy} onClose={()=>setPasteChoice(null)} onAfterClose={pasteChoice.focus}>
-      <div className="task-dialog-body">{error&&<p className="dialog-error" role="alert">{error}</p>}<p>保留在一个条目中，还是将编辑框内容按非空行拆分？</p><pre className="paste-preview">{pasteChoice.text}</pre><p className="dialog-hint">共 {pastedLines(pasteChoice.text).length} 条。{draft?.id?'第一条保留原任务及其子任务，其余紧随其后。':'保留当前栏目、左右栏和缩进位置。'} 拆分后各行按原有输入语法识别。</p>{pastedLines(pasteChoice.text).length>200&&<p className="dialog-error">一次最多拆分 200 条，请保留为一条或分批粘贴。</p>}</div>
+      <div className="task-dialog-body">{error&&<p className="dialog-error" role="alert">{error}</p>}<p>保留在一个条目中，还是将编辑框内容按非空行拆分？</p><pre className="paste-preview">{pasteChoice.text}</pre><p className="dialog-hint">共 {pastedLines(pasteChoice.text).length} 条。{draft?.id?'第一条保留原任务及其子任务，其余紧随其后。':'保留当前栏目、分栏和缩进位置。'} 拆分后各行按原有输入语法识别。</p>{pastedLines(pasteChoice.text).length>200&&<p className="dialog-error">一次最多拆分 200 条，请保留为一条或分批粘贴。</p>}</div>
       <footer className="task-dialog-actions"><button disabled={pasteBusy} onClick={()=>setPasteChoice(null)}>取消粘贴</button><button disabled={pasteBusy} onClick={()=>{pasteChoice.applySingle();setPasteChoice(null);}}>保留一条</button><button className="dialog-primary" disabled={pasteBusy||pastedLines(pasteChoice.text).length>200} onClick={splitPaste}>{pasteBusy?'拆分中…':'按行拆分'}</button></footer>
     </TaskDialog>}
     {inboxOpen&&<InboxDialog onClose={()=>setInboxOpen(false)}>
@@ -764,7 +738,7 @@ function App(){
       <div className="inbox-drafts-foot"><span>逐条采纳，即刻加入对应栏目。</span>{inboxBatches.length>0&&inboxBatches.every(batch=>batch.drafts.every(draft=>draft.decision!=='pending'))&&<button onClick={clearInbox}>清空原文与已处理批次</button>}</div>
     </InboxDialog>}
     {zen&&(()=>{const root=items.find(item=>item.id===zen.id);if(!root)return null;const rows=zenTree(root);return <div className="zen-screen" role="dialog" aria-modal="true" aria-label="ZEN 专注模式"><div className="zen-atmosphere" aria-hidden="true"><i/><i/><i/><i/></div><div className="zen-content"><div className="zen-label">ZEN <span>{root.domain.toUpperCase()}</span></div><div className="zen-timer" aria-live="off">{zenClock(zenNow-zen.startedAt)}</div><div className="zen-tree">{rows.map(({item,depth})=><article className={'zen-task '+(item.status==='done'?'is-done':'')} key={item.id} style={{'--zen-depth':depth}}><div className="zen-task-line"><span className="zen-mark">{item.status==='done'?'✓':item.type==='group'?'◇':'·'}</span><div className="zen-task-body"><h1>{inline(titleOf(item))}</h1>{item.content&&<p>{zenDescription(item.content)}</p>}{item.image&&<img className="zen-main-image" src={item.image} alt={item.title||'任务图片'}/>}</div></div>{zenMetadata(item).length>0&&<div className="zen-meta">{zenMetadata(item).map((value,index)=><span key={index}>{value}</span>)}</div>}{item.url&&<a href={item.url} target="_blank" rel="noreferrer">{item.url}</a>}</article>)}</div><div className="zen-actions">{zenConfirm==='hold'?<><button onClick={()=>setZenConfirm('')} disabled={pending.has('zen')}>取消</button><button className="zen-hold confirming" onClick={()=>finishZen('hold')} disabled={pending.has('zen')}>确认搁置？</button></>:<><button className={'zen-done '+(zenConfirm==='done'?'confirming':'')} onClick={()=>finishZen('done')} disabled={pending.has('zen')}>{zenConfirm==='done'?'确认完成？':<><Check size={16}/>完成</>}</button>{zenConfirm==='done'?<button onClick={()=>setZenConfirm('')} disabled={pending.has('zen')}>取消</button>:<button className="zen-hold" onClick={()=>finishZen('hold')} disabled={pending.has('zen')}>搁置</button>}</>}</div></div></div>})()}
-    {dragging&&<div className="drag-caption" role="status">{drop?.placement==='inside'?'成为「'+titleOf(byId.get(drop.targetId))+'」的子条目':drop?.placement==='end'?(drop.domain==='Work'?'移到 WORK '+(drop.workPane==='right'?'右栏':'左栏')+'末尾':'移到 '+drop.domain+' 末尾'):drop?'插到「'+titleOf(byId.get(drop.targetId))+'」'+(drop.placement==='before'?'之前':'之后')+'（同级）':'此处不可放置'} · Esc 取消</div>}
+    {dragging&&<div className="drag-caption" role="status">{drop?.placement==='inside'?'成为「'+titleOf(byId.get(drop.targetId))+'」的子条目':drop?.placement==='end'?(drop.domain==='Work'?'移到 WORK '+workPaneName(drop.workPane)+'末尾':'移到 '+drop.domain+' 末尾'):drop?'插到「'+titleOf(byId.get(drop.targetId))+'」'+(drop.placement==='before'?'之前':'之后')+'（同级）':'此处不可放置'} · Esc 取消</div>}
     {menu&&<div className={'context-menu '+(menu.kind==='row'?'row-menu':'')} role="menu" style={{left:Math.max(8,Math.min(menu.x,window.innerWidth-190)),top:Math.min(menu.y,window.innerHeight-(menu.kind==='row'?270:220))}} onPointerDown={event=>event.stopPropagation()} onKeyDown={event=>{if(event.key==='Escape'){event.preventDefault();setMenu(null);}}}>
       {menu.kind==='row'?<>
         {menu.item.type!=='divider'&&<button role="menuitem" disabled={pending.has(menu.item.id)} onClick={()=>startZen(menu.item)}>ZEN 专注</button>}
