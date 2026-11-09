@@ -5,7 +5,7 @@ import {existsSync,mkdtempSync,rmSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
-import {domains,parseLine,toLine,pasteLink,moveEntries,nextPosition,workPaneMap,compactEntryPositions,normalizeEntryLayout,loopPeriodKey} from '../src/lib/entries.js';
+import {domains,parseLine,toLine,pasteLink,moveEntries,nextPosition,workPaneMap,domainPaneMap,compactEntryPositions,normalizeEntryLayout,loopPeriodKey} from '../src/lib/entries.js';
 const group=parseLine('## 项目 sig:🚀 tone:sage');
 assert.equal(group.type,'group');assert.equal(group.title,'项目');assert.equal(group.signature,'🚀');assert.equal(group.tone,'sage');
 assert.equal(toLine(group),'## 项目 sig:🚀 tone:sage');
@@ -138,9 +138,9 @@ const assetStatus=async route=>(await fetch('http://127.0.0.1:'+port+route,{head
 const activityFor=async domain=>{const route='/api/activity?from='+new Date().toISOString().slice(0,10)+'&to='+new Date().toISOString().slice(0,10)+'&domain='+encodeURIComponent(domain);return (await request('GET',route)).data[0]||{created:0,completed:0,updated:0,removed:0};};
 const assertContiguousPositions=entries=>{
   const groups=new Map();
-  const panes=workPaneMap(entries);
+  const panes=new Map(domains.flatMap(domain=>[...domainPaneMap(entries,domain)]));
   for(const item of entries){
-    const pane=item.domain==='Work'?(panes.get(item.id)||'left'):'';
+    const pane=panes.get(item.id)||'left';
     const key=[item.domain,pane,item.parentId||''].join('\0');
     if(!groups.has(key))groups.set(key,[]);
     groups.get(key).push(item);
@@ -516,6 +516,24 @@ try{
   const older=(await request('GET','/api/entries/'+batchLoop.id+'/loop-history?offset=50')).data;
   assert.equal(older.records.length,1);assert.equal(older.nextOffset,null);
   assert.ok(history.data.records[49].completedAt>older.records[0].completedAt);
+
+  for(const domain of domains.filter(domain=>domain!=='Work')){
+    const root=(await request('POST','/api/entries',{domain,type:'todo',title:domain+' third root',content:'',workPane:'third'})).data;
+    assert.equal(root.workPane,'third');
+    const child=(await request('POST','/api/entries',{domain,type:'todo',title:'Inherited lane',content:'',parentId:root.id,workPane:'left'})).data;
+    assert.equal(child.workPane,'third','Children inherit the parent lane outside WORK too');
+    const imported=await request('POST','/api/entries/import',{domain,parentId:root.id,workPane:'right',text:'First child\nSecond child'});
+    assert.equal(imported.status,200);
+    assert.ok(imported.data.ids.every(id=>imported.data.items.find(item=>item.id===id).workPane==='third'));
+    const moved=await request('POST','/api/entries/move',{id:root.id,domain,workPane:'right',placement:'end'});
+    assert.equal(moved.status,200);
+    assert.equal(moved.data.find(item=>item.id===child.id).workPane,'right');
+    assert.equal(moved.data.find(item=>item.id===child.id).parentId,root.id);
+  }
+  await stop();await start();
+  const allLanes=(await request('GET','/api/entries')).data;
+  for(const domain of domains.filter(domain=>domain!=='Work'))assert.ok(allLanes.some(item=>item.domain===domain&&item.workPane==='right'),'Non-WORK lanes survive restart');
+  assertContiguousPositions(allLanes);
 
   for(let i=0;i<5;i++)assert.equal((await request('POST','/api/auth/login',{password:'bad'})).status,401);
   assert.equal((await request('POST','/api/auth/login',{password:'replacement'})).status,429);

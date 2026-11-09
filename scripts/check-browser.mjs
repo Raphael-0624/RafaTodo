@@ -42,6 +42,15 @@ async function reload(){
   await send('Page.reload');
   await until(`performance.timeOrigin!==${previous}&&document.readyState==='complete'`,'New page loaded');
 }
+const drawer=domain=>'[data-domain="'+domain+'"]';
+async function settleDrawers(){
+  await evaluate(`Promise.all([...document.querySelectorAll('.drawer,.drawer-surface')].flatMap(node=>node.getAnimations()).map(animation=>animation.finished.catch(()=>{})))`);
+}
+async function openDomain(domain){
+  if(!await evaluate(`document.querySelector(${JSON.stringify(drawer(domain))})?.dataset.open==='true'`))await click(drawer(domain)+' .drawer-rail');
+  await until(`document.querySelector(${JSON.stringify(drawer(domain))})?.dataset.open==='true'`,'Open '+domain);
+  await settleDrawers();
+}
 const button=text=>evaluate(`Array.from(document.querySelectorAll('dialog[open] button')).find(node=>node.textContent.trim()===${JSON.stringify(text)}).click()`);
 const row=id=>'[data-entry-id="'+id+'"]';
 async function screenshot(name){
@@ -82,9 +91,9 @@ try{
   await click(row(ids.child)+' .row-menu-trigger');
   await until('!!document.querySelector(".context-menu")');
   await evaluate(`Array.from(document.querySelectorAll('.context-menu button')).find(node=>node.textContent==='置顶').click()`);
-  await until('document.querySelector(".workspace>.work-pinned-list")?.textContent.includes("Child task")','WORK pins above board');
+  await until('document.querySelector("[data-domain=Work] .work-pinned-list")?.textContent.includes("Child task")','WORK pins above board');
   await until(`fetch('/api/entries').then(response=>response.json()).then(items=>!!items.find(item=>item.id===${JSON.stringify(ids.child)}).pinnedAt)`,'Pin saved');
-  assert.equal(await evaluate('!!document.querySelector("[data-domain=Work] .pinned-list")'),false,'WORK pins are outside the three-pane area');
+  assert.equal(await evaluate('!!document.querySelector("[data-domain=Work] .work-cols .pinned-list")'),false,'WORK pins sit above all internal lanes');
   await click(row(ids.parent)+' .task-toggle');
   await until(`!document.querySelector(${JSON.stringify(row(ids.child))})`,'child folded');
   await until(`fetch('/api/entries').then(response=>response.json()).then(items=>items.find(item=>item.id===${JSON.stringify(ids.parent)}).collapsed===true)`,'fold saved');
@@ -98,43 +107,79 @@ try{
   await screenshot('loop-history');await click('dialog[open] [aria-label="关闭"]');
 
   assert.equal(await evaluate('!!document.querySelector(".select-mode-trigger,.selection-bar")'),false);
-  const geometry=()=>evaluate(`(()=>{
+  const geometry=async()=>{
+    await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+    return evaluate(`(()=>{
     const rect=node=>{const r=node.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom};};
-    return {pins:rect(document.querySelector('.work-pinned-list')),work:rect(document.querySelector('[data-domain="Work"]')),panes:[...document.querySelectorAll('.work-col')].map(rect),lower:[...document.querySelectorAll('.side-board>.column')].map(rect),inbox:rect(document.querySelector('.inbox-wrap')),input:rect(document.querySelector('#work-inbox')),pageWidth:document.documentElement.scrollWidth,pageHeight:document.documentElement.scrollHeight,width:innerWidth,height:innerHeight};
-  })()`);
+    const active=document.querySelector('.drawer.is-open');
+    return {active:active.dataset.domain,panels:[...document.querySelectorAll('.drawer')].map(node=>({...rect(node),open:node.classList.contains('is-open')})),surface:rect(active.querySelector('.drawer-surface')),lanes:rect(active.querySelector('.work-cols')),panes:[...active.querySelectorAll('.work-col')].map(rect),inbox:rect(document.querySelector('.inbox-wrap')),input:rect(document.querySelector('#work-inbox')),pageWidth:document.documentElement.scrollWidth,pageHeight:document.documentElement.scrollHeight,width:innerWidth,height:innerHeight};
+    })()`);
+  };
   function checkGeometry(value){
-    assert.equal(value.panes.length,3);
-    assert.ok(value.pins.height>0&&value.pins.bottom<=value.work.y,'Pinned area stays above WORK');
-    assert.ok(value.pins.width>value.work.width*.9,'Pinned area spans all WORK panes');
-    for(const pane of value.panes)assert.ok(Math.abs(pane.width-value.work.width/3)<1,'WORK panes stay equal');
-    assert.ok(value.lower.every(col=>Math.abs(col.y-value.lower[0].y)<1),'Lower domains stay side by side');
-    assert.ok(value.lower[0].y>=value.work.bottom,'WORK is above lower domains');
+    assert.equal(value.panels.length,4);assert.equal(value.panels.filter(panel=>panel.open).length,1);
+    assert.ok(value.panels.every(panel=>Math.abs(panel.y-value.panels[0].y)<1),'All four drawers share one horizontal row');
+    for(let i=1;i<4;i++)assert.ok(Math.abs(value.panels[i].x-value.panels[i-1].right)<1,'Drawers stay adjacent');
+    assert.ok(Math.abs(value.surface.width-value.panels.find(panel=>panel.open).width)<1,'Content uses the expanded width');
+    assert.ok(value.panels.filter(panel=>!panel.open).every(panel=>panel.width>=30&&panel.width<=50),'Closed drawers become narrow rails');
+    for(const pane of value.panes)assert.ok(Math.abs(pane.width-value.lanes.width/value.panes.length)<1,'Internal lanes stay equal');
     assert.ok(Math.abs(value.inbox.bottom-value.height)<1,'INBOX stays at the bottom');
-    assert.ok(Math.abs(value.inbox.width-value.work.width)<1,'INBOX spans the workspace');
+    assert.ok(Math.abs(value.inbox.width-value.width)<1,'INBOX spans the workspace');
     assert.ok(value.pageWidth<=value.width&&value.pageHeight<=value.height,'No page overflow');
   }
   checkGeometry(await geometry());
-  async function dragDivider(selector,dx,dy){
-    const box=await evaluate(`(()=>{const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);
-    await send('Input.dispatchMouseEvent',{type:'mousePressed',x:box.x,y:box.y,button:'left',clickCount:1});
-    await send('Input.dispatchMouseEvent',{type:'mouseMoved',x:box.x+dx,y:box.y+dy,buttons:1});
-    await send('Input.dispatchMouseEvent',{type:'mouseReleased',x:box.x+dx,y:box.y+dy,button:'left',clickCount:1});
-    await until('!document.body.classList.contains("is-resizing")');
+  assert.ok(await evaluate(`(()=>{const pins=document.querySelector('.work-pinned-list').getBoundingClientRect(),head=document.querySelector('[data-domain=Work] .column-head').getBoundingClientRect(),lanes=document.querySelector('[data-domain=Work] .work-cols').getBoundingClientRect();return pins.y>=head.bottom&&pins.bottom<=lanes.y;})()`),'Pins sit below the domain title and above every lane');
+  assert.equal(await evaluate('document.querySelectorAll(".layout-divider").length'),0,'Obsolete splitters are removed');
+  const originalLayout=await evaluate(`fetch('/api/entries').then(response=>response.json()).then(items=>items.map(({id,workPane,parentId,position})=>({id,workPane,parentId,position})))`);
+  for(const expected of [1,2,3]){
+    await click(drawer('Work')+' .column-count');
+    await until(`document.querySelector('[data-domain=Work] .work-cols').dataset.columns==='${expected}'`,'Cycle WORK lanes');
+    for(const id of Object.values(ids).filter(id=>id!==ids.empty))assert.equal(await evaluate(`document.querySelectorAll(${JSON.stringify(row(id))}).length`),1,'Folding never hides or duplicates tasks');
+    assert.deepEqual(await evaluate(`fetch('/api/entries').then(response=>response.json()).then(items=>items.map(({id,workPane,parentId,position})=>({id,workPane,parentId,position})))`),originalLayout,'Column switches do not rewrite task ownership or order');
   }
-  const before=await geometry();
-  await dragDivider('.layout-divider-horizontal',0,-100);
-  await until(`document.querySelector('[data-domain="Work"]').getBoundingClientRect().height<${before.work.height-70}`,'WORK height drag');
-  await dragDivider('.layout-divider-vertical',90,0);
-  await until(`document.querySelector('.side-board>.column').getBoundingClientRect().width>${before.lower[0].width+60}`,'DAILY width drag');
-  const lowerBefore=(await geometry()).lower;
-  await dragDivider('.layout-divider-vertical:last-child',80,0);
-  await until(`document.querySelector('.side-board>.column:last-of-type').getBoundingClientRect().width<${lowerBefore[2].width-50}`,'LIFE width drag');
-  checkGeometry(await geometry());
-  const savedLayout=await evaluate('localStorage.getItem("rafa-layout-v2")');
-  await reload();await until('!!document.querySelector(".board")');
-  assert.equal(await evaluate('localStorage.getItem("rafa-layout-v2")'),savedLayout,'Divider settings persist');
-  const persisted=await geometry();checkGeometry(persisted);
-  assert.ok(Math.abs(persisted.work.height-(before.work.height-100))<3);
+  for(const [domain,count] of [['Daily',2],['Life',3],['Glean & Idea',2]]){
+    await openDomain(domain);
+    for(let n=1;n<count;n++)await click(drawer(domain)+' .column-count');
+    await until(`document.querySelector(${JSON.stringify(drawer(domain)+' .work-cols')}).dataset.columns==='${count}'`,'Independent columns '+domain);
+    checkGeometry(await geometry());
+  }
+  const storedDrawers=await evaluate('localStorage.getItem("rafa-drawers-v1")');
+  await reload();await until('!!document.querySelector(".drawer.is-open")');
+  assert.equal(await evaluate('localStorage.getItem("rafa-drawers-v1")'),storedDrawers,'Active drawer and independent counts survive reload');
+  assert.equal((await geometry()).active,'Glean & Idea');
+  await openDomain('Life');
+  await click(drawer('Life')+' [data-work-pane=third] .add-row button');
+  await send('Input.insertText',{text:'Life third lane'});
+  await send('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter'});
+  await until(`fetch('/api/entries').then(response=>response.json()).then(items=>items.some(item=>item.title==='Life third lane'&&item.domain==='Life'&&item.workPane==='third'))`,'Creating in a non-WORK third lane persists the right ownership');
+  await send('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter'});
+  await openDomain('Work');
+  await click(drawer('Work')+' [data-work-pane=left] .add-row button');
+  await send('Input.insertText',{text:'Saved before image drop'});
+  await evaluate(`(()=>{const transfer=new DataTransfer();transfer.items.add(new File([Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a4KkAAAAASUVORK5CYII='),char=>char.charCodeAt(0))],'drawer-drop.png',{type:'image/png'}));document.querySelector('[data-domain=Daily] .drawer-rail').dispatchEvent(new DragEvent('drop',{dataTransfer:transfer,bubbles:true,cancelable:true}));})()`);
+  await until(`document.querySelector('[data-domain=Daily]').dataset.open==='true'&&document.querySelector('.write-row textarea')?.value.includes('drawer-drop.png')`,'Dropping an image opens the correct drawer');
+  await settleDrawers();
+  await send('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter'});
+  await send('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter'});
+  await until(`fetch('/api/entries').then(response=>response.json()).then(items=>items.some(item=>item.domain==='Daily'&&item.type==='image'&&item.title==='drawer-drop.png')&&items.some(item=>item.domain==='Work'&&item.title==='Saved before image drop'))`,'Image drop preserves the previous editor and saves the image in its drawer');
+  await openDomain('Work');
+  await click(drawer('Life')+' .drawer-rail');
+  await until(`document.querySelector('[data-domain=Life]').dataset.open==='true'`);
+  const surfaceWidth=await evaluate(`document.querySelector('[data-domain=Life] .drawer-surface').getBoundingClientRect().width`);
+  await pause(80);
+  assert.equal(await evaluate(`document.querySelector('[data-domain=Life] .drawer-surface').getBoundingClientRect().width`),surfaceWidth,'Content width stays fixed during shell animation');
+  await click(drawer('Daily')+' .drawer-rail');await openDomain('Daily');checkGeometry(await geometry());
+  await openDomain('Work');
+  // A failed save must leave both the current drawer and the input intact.
+  await click(drawer('Work')+' [data-work-pane=left] .add-row button');
+  await send('Input.insertText',{text:'Save before switching'});
+  await evaluate(`(()=>{const original=window.fetch;window.fetch=async(...args)=>{if(args[0]==='/api/entries'&&args[1]?.method==='POST'){window.fetch=original;throw Error('Simulated save failure');}return original(...args);};})()`);
+  await click(drawer('Daily')+' .drawer-rail');
+  await until('document.querySelector(".toast-message")?.textContent.includes("Simulated save failure")','Failed save is visible');
+  assert.equal((await geometry()).active,'Work');
+  assert.equal(await evaluate('document.querySelector(".write-row textarea").value'),'Save before switching','Failed switch retains input');
+  await openDomain('Daily');await until('!document.querySelector(".write-row")','Successful switch saves first');
+  assert.ok(await evaluate(`fetch('/api/entries').then(response=>response.json()).then(items=>items.some(item=>item.title==='Save before switching'&&item.domain==='Work'))`));
+  await openDomain('Work');
 
   async function inboxValue(text){
     await evaluate(`(()=>{const input=document.querySelector('#work-inbox');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(input,${JSON.stringify(text)});input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
@@ -150,14 +195,14 @@ try{
   await inboxValue('');await until(`document.querySelector('#work-inbox').clientHeight<=${oneLine}`,'INBOX shrinks');
 
   // Creation in the new third pane must survive a reload without moving legacy panes.
-  await click('.work-col[data-work-pane="third"] .add-row button');
+  await click('[data-domain="Work"] [data-work-pane="third"] .add-row button');
   await until('!!document.querySelector(".write-row textarea")');
   await send('Input.insertText',{text:'Third pane task'});
   await send('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter'});
   await send('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter'});
-  await until('Array.from(document.querySelectorAll("[data-work-pane=third] .entry-title")).some(node=>node.textContent==="Third pane task")');
+  await until('Array.from(document.querySelectorAll("[data-domain=Work] [data-work-pane=third] .entry-title")).some(node=>node.textContent==="Third pane task")');
   await reload();await until('!!document.querySelector(".board")');
-  await until('Array.from(document.querySelectorAll("[data-work-pane=third] .entry-title")).some(node=>node.textContent==="Third pane task")');
+  await until('Array.from(document.querySelectorAll("[data-domain=Work] [data-work-pane=third] .entry-title")).some(node=>node.textContent==="Third pane task")');
   assert.equal(await evaluate(`document.querySelector(${JSON.stringify(row(ids.parent))}).closest('[data-work-pane]').dataset.workPane`),'left');
   assert.equal(await evaluate(`document.querySelector(${JSON.stringify(row(ids.weekly))}).closest('[data-work-pane]').dataset.workPane`),'right');
   await screenshot('desktop-layout');
@@ -189,12 +234,30 @@ try{
   await send('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape'});await until('!document.querySelector(".drag-caption")');
   await send('Input.dispatchMouseEvent',{type:'mouseReleased',x:points.x,y:points.top+points.height*.9,button:'left',clickCount:1});
 
-  const crossPane=await evaluate(`(()=>{const source=document.querySelector(${JSON.stringify(row(ids.sibling)+' .drag-handle')}).getBoundingClientRect();const target=document.querySelector('[data-work-pane="third"]').getBoundingClientRect();return {x:source.x+8,y:source.y+8,tx:target.x+80,ty:target.bottom-65};})()`);
+  const crossPane=await evaluate(`(()=>{const source=document.querySelector(${JSON.stringify(row(ids.sibling)+' .drag-handle')}).getBoundingClientRect();const target=document.querySelector('[data-domain="Work"] [data-work-pane="third"]').getBoundingClientRect();return {x:source.x+8,y:source.y+8,tx:target.x+80,ty:target.bottom-65};})()`);
   await send('Input.dispatchMouseEvent',{type:'mousePressed',x:crossPane.x,y:crossPane.y,button:'left',clickCount:1});
   await send('Input.dispatchMouseEvent',{type:'mouseMoved',x:crossPane.tx,y:crossPane.ty,buttons:1});
-  await until('!!document.querySelector("[data-work-pane=third].is-end-drop")','Drop into third pane');
+  await until('!!document.querySelector("[data-domain=Work] [data-work-pane=third].is-end-drop")','Drop into third pane');
   await send('Input.dispatchMouseEvent',{type:'mouseReleased',x:crossPane.tx,y:crossPane.ty,button:'left',clickCount:1});
   await until(`document.querySelector(${JSON.stringify(row(ids.sibling))})?.closest('[data-work-pane]')?.dataset.workPane==='third'`,'Third pane drag saved');
+
+  async function dragToDrawer(id,domain,pane){
+    await evaluate(`Promise.all(document.querySelector('.board').getAnimations({subtree:true}).map(animation=>animation.finished.catch(()=>{})))`);
+    await pause(120);
+    const points=await evaluate(`(()=>{const source=document.querySelector(${JSON.stringify(row(id)+' .drag-handle')}),rail=document.querySelector(${JSON.stringify(drawer(domain)+' .drawer-rail')});source.scrollIntoView({block:'center',behavior:'instant'});const s=source.getBoundingClientRect(),r=rail.getBoundingClientRect();return {x:s.x+7,y:s.y+8,tx:r.x+r.width/2,ty:r.y+r.height/2};})()`);
+    await send('Input.dispatchMouseEvent',{type:'mousePressed',x:points.x,y:points.y,button:'left',clickCount:1});
+    await send('Input.dispatchMouseEvent',{type:'mouseMoved',x:points.tx,y:points.ty,buttons:1});
+    await until(`document.querySelector(${JSON.stringify(drawer(domain))}).dataset.open==='true'`,'Hover opens '+domain);
+    await settleDrawers();
+    const target=await evaluate(`(()=>{const r=document.querySelector(${JSON.stringify(drawer(domain)+' [data-work-pane="'+pane+'"]')}).getBoundingClientRect();return {x:r.x+80,y:r.bottom-65};})()`);
+    await send('Input.dispatchMouseEvent',{type:'mouseMoved',...target,buttons:1});
+    await until(`!!document.querySelector(${JSON.stringify(drawer(domain)+' [data-work-pane="'+pane+'"].is-end-drop')})`,'Cross-drawer end target');
+    await send('Input.dispatchMouseEvent',{type:'mouseReleased',...target,button:'left',clickCount:1});
+    await until(`fetch('/api/entries').then(response=>response.json()).then(items=>items.some(item=>item.id===${JSON.stringify(id)}&&item.domain===${JSON.stringify(domain)}&&item.workPane===${JSON.stringify(pane)}))`,'Cross-drawer move saved');
+    await pause(120);
+  }
+  await dragToDrawer(ids.sibling,'Daily','right');
+  await dragToDrawer(ids.sibling,'Work','third');
 
   await send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
   await send('Emulation.setTouchEmulationEnabled',{enabled:true});
@@ -203,29 +266,36 @@ try{
   await until('document.querySelector("#work-inbox").clientHeight>60','Mobile INBOX wraps');
   checkGeometry(await geometry());await screenshot('mobile-layout');
   await inboxValue('');
+  await evaluate(`document.querySelector('[data-domain=Work] .work-scroll').scrollLeft=120`);
+  await until(`JSON.parse(localStorage.getItem('rafa-drawer-scroll'))?.['Work:3:x']===120`,'Mobile horizontal scroll saved');
+  await openDomain('Life');
   await click(row(ids.empty)+' .loop-label');
   await until('document.querySelector("dialog[open]")?.textContent.includes("还没有完成记录")','empty history');
   assert.ok(await evaluate('document.querySelector("dialog[open]").getBoundingClientRect().right<=window.innerWidth'));
   await click('dialog[open] [aria-label="关闭"]');
+  await openDomain('Work');
+  await until(`document.querySelector('[data-domain=Work] .work-scroll').scrollLeft===120`,'Returning to a drawer restores horizontal scroll');
+  await screenshot('mobile-drawers');
   await send('Emulation.setDeviceMetricsOverride',{width:768,height:1024,deviceScaleFactor:1,mobile:false});
   checkGeometry(await geometry());
   await evaluate(`(async()=>{
-    for(const [domain,workPane] of [['Work','left'],['Work','right'],['Work','third'],['Daily',''],['Life',''],['Glean & Idea','']]){
+    for(const [domain,workPane] of ['Work','Daily','Life','Glean & Idea'].flatMap(domain=>['left','right','third'].map(pane=>[domain,pane]))){
       const response=await fetch('/api/entries/import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({domain,workPane,text:Array.from({length:35},(_,i)=>domain+' scroll '+i).join('\\n')})});
       if(!response.ok)throw Error('Scroll fixture failed');
     }
   })()`);
-  await reload();await until('document.querySelectorAll(".entry").length>200');
+  await reload();await until('document.querySelectorAll(".entry").length>400');
   checkGeometry(await geometry());
-  const scrolls=await evaluate(`(()=>{
-    const nodes=[...document.querySelectorAll('.work-col-scroll,.side-board .column-scroll')];
-    return nodes.map((node,index)=>{node.scrollTop=50;const result={scrollable:node.scrollHeight>node.clientHeight,moved:node.scrollTop===50,independent:nodes.every((other,i)=>i===index||other.scrollTop===0)};node.scrollTop=0;return result;});
-  })()`);
-  assert.equal(scrolls.length,6);assert.ok(scrolls.every(value=>value.scrollable&&value.moved&&value.independent),'All six lists scroll independently');
-  await evaluate(`document.querySelector('[data-work-pane="third"] .work-col-scroll').scrollTop=90`);
-  await until('JSON.parse(localStorage.getItem("rafa-work-scroll"))?.third===90','Third pane scroll saved');
-  await reload();
-  await until('document.querySelector("[data-work-pane=third] .work-col-scroll")?.scrollTop===90','Third pane scroll restored');
+  for(const domain of ['Work','Daily','Life','Glean & Idea']){
+    await openDomain(domain);
+    const scrolls=await evaluate(`(()=>{const nodes=[...document.querySelectorAll(${JSON.stringify(drawer(domain)+' .work-col-scroll')})];nodes.forEach(node=>node.scrollTop=0);return nodes.map((node,index)=>{node.scrollTop=50;const result={scrollable:node.scrollHeight>node.clientHeight,moved:node.scrollTop===50,independent:nodes.every((other,i)=>i===index||other.scrollTop===0)};node.scrollTop=0;return result;});})()`);
+    assert.ok(scrolls.every(value=>value.scrollable&&value.moved&&value.independent),'Every visible lane scrolls independently in '+domain);
+    await evaluate(`document.querySelector(${JSON.stringify(drawer(domain)+' .work-col-scroll')}).scrollTop=90`);
+    await until(`Object.entries(JSON.parse(localStorage.getItem('rafa-drawer-scroll'))).some(([key,top])=>key.startsWith(${JSON.stringify(domain+':')})&&key.endsWith(':left')&&top===90)`,'Scroll saved '+domain);
+  }
+  await openDomain('Work');
+  await until(`document.querySelector('[data-domain=Work] .work-col-scroll').scrollTop===90`,'Switch restores WORK scroll');
+  await reload();await until(`document.querySelector('[data-domain=Work] .work-col-scroll')?.scrollTop===90`,'Reload restores scroll');
   await click(row(ids.parent)+' .task-toggle');
   await until(`!document.querySelector(${JSON.stringify(row(ids.child))})`,'Fold before locating a pin');
   await click('.work-pinned-list .pinned-title');
@@ -235,6 +305,8 @@ try{
   await until(`fetch('/api/entries').then(response=>response.json()).then(items=>!items.find(item=>item.id===${JSON.stringify(ids.child)}).pinnedAt)`,'Unpin saved');
 
   async function taskAction(id,label){
+    const domain=await evaluate(`fetch('/api/entries').then(response=>response.json()).then(items=>items.find(item=>item.id===${JSON.stringify(id)}).domain)`);
+    await openDomain(domain);
     await click(row(id)+' .row-menu-trigger');
     await until('!!document.querySelector(".context-menu")');
     await evaluate(`Array.from(document.querySelectorAll('.context-menu button')).find(node=>node.textContent===${JSON.stringify(label)}).click()`);
@@ -353,7 +425,7 @@ try{
   await click('.zen-done');
   await until('!document.querySelector(".zen-screen,.focus-card")','ZEN completion stops the shared timer');
   assert.equal((await focusState()).activeId,'');
-  await click('[data-work-pane="third"] .add-row button');
+  await click('[data-domain="Work"] [data-work-pane="third"] .add-row button');
   await until('!!document.querySelector(".write-row textarea")');
   await send('Input.insertText',{text:'不刷短视频 !resist'});
   await send('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter'});
@@ -401,8 +473,25 @@ try{
   await evaluate(`document.querySelector(${JSON.stringify(resistRow)}).scrollIntoView({block:'center',behavior:'instant'})`);
   assert.ok(await evaluate(`(()=>{const entry=document.querySelector(${JSON.stringify(resistRow)}),label=entry.querySelector('.resist-label').getBoundingClientRect(),add=entry.querySelector('.resist-add').getBoundingClientRect(),pane=entry.closest('.work-col').getBoundingClientRect();return label.width>70&&label.left>=pane.left&&label.right<=pane.right&&add.left>=pane.left&&add.right<=pane.right;})()`),'Mobile habit label and +1 stay readable within their pane');
   await screenshot('mobile-resist');
+  await openDomain('Work');
+  await evaluate(`document.querySelector('[data-domain=Work] .drawer-toggle').focus()`);
+  await send('Input.dispatchKeyEvent',{type:'keyDown',key:'ArrowRight',code:'ArrowRight'});
+  await until(`document.querySelector('[data-domain=Daily]').dataset.open==='true'`,'Keyboard switches drawers');
+  await settleDrawers();
+  assert.equal(await evaluate(`document.activeElement.matches('[data-domain=Daily] .drawer-toggle')`),true,'Keyboard focus follows the expanded drawer');
+  await send('Input.dispatchKeyEvent',{type:'keyUp',key:'ArrowRight',code:'ArrowRight'});
+  await send('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-motion',value:'reduce'}]});
+  await openDomain('Life');
+  assert.equal(await evaluate(`getComputedStyle(document.querySelector('.drawer.is-open')).transitionDuration`),'0s','Reduced motion disables the drawer transition');
+  checkGeometry(await geometry());
+  await screenshot('mobile-drawers-life');
+  await send('Emulation.setEmulatedMedia',{features:[]});
+  await openDomain('Work');
   assert.deepEqual(errors,[],'Browser runtime errors');
-  console.log('PASS: desktop/mobile layout, task interactions, image preview, shared focus/ZEN and resist creation, +1, undo, history and retry');
+  console.log('PASS: desktop/mobile drawers, independent columns, non-mutating folds, save failure, hover drag, scroll/reload, keyboard/reduced motion, image preview, focus/ZEN and resist check-ins');
+}catch(error){
+  try{await screenshot('browser-failure');}catch{}
+  throw error;
 }finally{
   ws?.close();
   for(const child of [browser,app])if(child&&child.exitCode===null){const exited=new Promise(resolve=>child.once('exit',resolve));child.kill();await Promise.race([exited,pause(3000)]);}

@@ -829,8 +829,8 @@ app.post('/api/entries/import', (req, res) => {
       if (parentId && (!parent || parent.archivedAt || parent.domain !== domain)) throw new Error('父条目已不存在');
       if (replaceId && (!replaced || replaced.archivedAt || replaced.domain !== domain)) throw new Error('原任务已不存在，请先保留原文');
       const actualParentId = replaced ? replaced.parentId || '' : target ? target.parentId || '' : parentId;
-      const panes = entryUtils.workPaneMap(existing);
-      const pane = domain === 'Work' ? panes.get(replaced?.id || target?.id || parent?.id) || entryUtils.validWorkPane(workPane) : '';
+      const panes = entryUtils.domainPaneMap(existing, domain);
+      const pane = panes.get(replaced?.id || target?.id || parent?.id) || entryUtils.validWorkPane(workPane);
       let cursor = targetId;
       const now = new Date().toISOString();
       for (const line of lines) {
@@ -899,6 +899,9 @@ app.put('/api/entries/:id', (req, res) => {
   catch (error) { res.status(400).json({error: error.message}); }
 });
 function storeEntry(item, onSaved) {
+  const parentRow = item.parentId && db.prepare('SELECT data FROM entries WHERE id=?').get(item.parentId);
+  const parent = parentRow && JSON.parse(parentRow.data);
+  item.workPane = entryUtils.validWorkPane(parent?.domain === item.domain ? parent.workPane : item.workPane);
   if (item.resist !== undefined && typeof item.resist !== 'boolean') throw new Error('克制打卡设置无效');
   if (item.resist && (item.type !== 'todo' || item.loop || !['open', 'removed'].includes(item.status))) throw new Error('克制打卡仅支持非循环任务，请使用 +1 记录');
   for (const key of ['resistToday', 'resistTotal']) delete item[key];

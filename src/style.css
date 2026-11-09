@@ -3,13 +3,9 @@ html,body,#root{height:100%}
 .app{height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidden}
 .app>.topbar{flex:0 0 68px;height:68px}
 .workspace{flex:1;min-height:0;width:100%;max-width:1920px;margin:0 auto;display:flex;flex-direction:column}
-.board{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,var(--work-height,65fr)) 8px minmax(0,var(--bottom-height,35fr));position:relative}
-.board>.column[data-domain="Work"]{grid-column:1;grid-row:1}
-.side-board{grid-column:1;grid-row:3;position:relative;display:grid;grid-template-rows:minmax(0,1fr);min-width:0;min-height:0}
+.board{flex:1;min-height:0;position:relative}
 .column{display:flex;flex-direction:column;min-width:0;min-height:0;padding:14px 26px 0;position:relative;overflow:hidden;isolation:isolate}
 .column-head{flex:0 0 auto;position:relative;z-index:2;background:#fcfcfa}
-.side-board>.column{grid-row:1;border-right:1px solid #e0e5db}
-.side-board>.column:last-of-type{border-right:0}
 .column-scroll{flex:1;min-height:0;overflow:auto;position:relative;z-index:1;margin:0 -16px;padding:0 16px 16px;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:#d5dcd0 transparent}
 .workspace .column-watermark{font-size:clamp(60px,10vw,150px)}
 .work-scroll{overflow:hidden;margin:0 -26px;padding:0}
@@ -17,14 +13,6 @@ html,body,#root{height:100%}
 .work-col{min-width:0;min-height:0;display:flex;flex-direction:column;border-right:1px solid #e0e5db}
 .work-col:last-child{border-right:0}
 .work-col-scroll{flex:1;min-height:0;overflow:auto;padding:0 24px 16px;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:#d5dcd0 transparent}
-.layout-divider{z-index:8;touch-action:none;outline:none;position:relative}
-.layout-divider::after{content:'';position:absolute;background:#dce3d5;transition:background-color 150ms ease}
-.layout-divider:hover::after,.layout-divider:focus-visible::after{background:#73976b}
-.layout-divider:focus-visible{outline:2px solid #73976b;outline-offset:-2px}
-.layout-divider-horizontal{grid-column:1;grid-row:2;cursor:row-resize;background:#f6f8f2}
-.layout-divider-horizontal::after{height:1px;left:0;right:0;top:3px}
-.layout-divider-vertical{position:absolute;top:0;bottom:0;width:12px;transform:translateX(-50%);cursor:col-resize}
-.layout-divider-vertical::after{width:1px;left:5px;top:0;bottom:0}
 .inbox-wrap{flex:0 0 auto;position:relative;z-index:10;padding:5px 12px;border-top:1px solid #dce3d5;background:#f4f6ef}
 .inbox-entry{width:100%;min-width:0;display:flex;align-items:flex-end;border:1px solid #dde4d5;border-radius:4px;background:#fff}
 .inbox-entry:focus-within{border-color:#8daf8b}
@@ -206,7 +194,6 @@ img[role="button"]:focus-visible{outline:2px solid #438865;outline-offset:3px}
 @media(max-width:720px){.topbar{height:68px;padding:0 22px}.brand{font-size:25px}.column-head{margin-bottom:12px;padding-bottom:14px}.column-head h1{font-size:18px}.entry-title,.write-input textarea{font-size:15px}.entry-meta{font-size:10px}.entry-read,.write-row{padding:4px 4px 4px 30px}.drag-handle{opacity:.65;top:2px;left:2px;width:24px;height:24px}.write-input textarea{font-size:16px}.global-error{margin:12px 22px 0}.entry-note{font-size:12px}}
 @media(hover:none){.drag-handle{opacity:.6}}
 @media(max-width:720px){.error-toast{top:12px;width:calc(100vw - 24px);max-width:none;padding:7px 8px 7px 12px}.toast-retry{min-height:36px}.toast-close{width:36px;height:36px}}
-.is-resizing{user-select:none}
 .focus-card{position:fixed;z-index:35;top:94px;left:50%;transform:translateX(-50%);width:min(560px,calc(100vw - 32px));max-height:min(55vh,580px);max-height:min(55dvh,580px);display:flex;flex-direction:column;border:1px solid #bacbb2;border-radius:16px;background:#fcfdf9;box-shadow:0 16px 48px #293b2926,0 2px 8px #293b2912;overflow:hidden;animation:focus-card-in 220ms ease-out}
 .focus-card-head{display:flex;align-items:center;gap:7px;flex:0 0 auto;padding:12px 18px 10px;border-bottom:1px solid #e4eadf;background:linear-gradient(110deg,#eef5e8,#fcfdf9);color:#4c7043;font-size:11px;font-weight:650;letter-spacing:.04em}
 .focus-status-dot{width:6px;height:6px;border-radius:50%;background:#64935a;box-shadow:0 0 0 3px #64935a17}

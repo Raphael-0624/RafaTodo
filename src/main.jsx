@@ -1,14 +1,15 @@
 import React,{useState,useEffect,useLayoutEffect,useRef} from 'react';
 import {createRoot} from 'react-dom/client';
 import {Plus,ArrowUpRight,Check,TextT,LinkSimple,ImageSquare,DotsSixVertical,DotsThree,X,Trash,ArrowCounterClockwise,CaretDown,CaretRight,ChartBar,Archive,PushPin,MagicWand} from '@phosphor-icons/react';
-import {domains,parseLine,toLine,treeRows,workPaneMap,pasteLink,workPanes,workPaneName,validWorkPane} from './lib/entries.js';
+import {domains,parseLine,toLine,treeRows,domainPaneMap,pasteLink,workPanes,workPaneName,validWorkPane} from './lib/entries.js';
 import {dropPlacement,pastedLines} from './lib/interactions.js';
 import {TaskDialog,LoopHistoryDialog} from './components/TaskDialogs.jsx';
 import {ResistHistoryDialog} from './components/ResistHistoryDialog.jsx';
-import {normalizeLayout,moveDivider,dividerBounds,defaultLayout} from './lib/layout.js';
+import {normalizeLayout,cycleColumns,visiblePanes} from './lib/layout.js';
 import {focusElapsed,focusClock} from './lib/focus.js';
 import {ImagePreviewProvider,PreviewImage} from './components/ImagePreview.jsx';
 import './style.css';
+import './notebook.css';
 
 function newId(){
   if(typeof crypto!=='undefined'&&typeof crypto.randomUUID==='function')return crypto.randomUUID();
@@ -35,19 +36,20 @@ function previewType(value){
   return 'todo';
 }
 const prefersReducedMotion=()=>window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-function readLayout(){try{return normalizeLayout(JSON.parse(localStorage.getItem('rafa-layout-v2')));}catch{return normalizeLayout();}}
+function readLayout(){try{return normalizeLayout(JSON.parse(localStorage.getItem('rafa-drawers-v1')));}catch{return normalizeLayout();}}
 const dayKey=value=>{const date=new Date(value);return Number.isNaN(date.getTime())?'':date.toLocaleDateString('en-CA');};
 function readStored(key,fallback){try{const value=localStorage.getItem(key);return value===null?fallback:JSON.parse(value);}catch{return fallback;}}
 function buildIndexes(items){
   const byId=new Map(items.map(item=>[item.id,item])),childrenByParent=new Map();
   for(const item of items){const key=item.parentId||'';if(!childrenByParent.has(key))childrenByParent.set(key,[]);childrenByParent.get(key).push(item);}
   const descendants=id=>{const result=new Set(),queue=[id];while(queue.length){for(const child of childrenByParent.get(queue.pop())||[])if(!result.has(child.id)){result.add(child.id);queue.push(child.id);}}return result;};
-  const workRows=treeRows(items,'Work'),workPanes=workPaneMap(items,workRows);
-  return {byId,childrenByParent,descendants,workRows,workPanes};
+  const rows=new Map(domains.map(domain=>[domain,treeRows(items,domain)]));
+  const panes=new Map(domains.flatMap(domain=>[...domainPaneMap(items,domain,rows.get(domain))]));
+  return {byId,childrenByParent,descendants,rows,panes};
 }
 function localEndPosition(entries,item){
-  const panes=item.domain==='Work'?workPaneMap(entries):null,pane=validWorkPane(item.workPane);
-  const siblings=entries.filter(entry=>entry.domain===item.domain&&(entry.parentId||'')===(item.parentId||'')&&(item.domain!=='Work'||(panes.get(entry.id)||'left')===pane));
+  const panes=domainPaneMap(entries,item.domain),pane=panes.get(item.parentId)||validWorkPane(item.workPane);
+  const siblings=entries.filter(entry=>entry.domain===item.domain&&(entry.parentId||'')===(item.parentId||'')&&(panes.get(entry.id)||'left')===pane);
   return Math.max(-1,...siblings.map(entry=>Number.isFinite(entry.position)?entry.position:-1))+1;
 }
 function placeOptimisticEntry(entries,item,insert){
@@ -55,12 +57,12 @@ function placeOptimisticEntry(entries,item,insert){
   if(!insert?.targetId)return next;
   const target=next.find(entry=>entry.id===insert.targetId);
   if(!target)return next;
-  const panes=item.domain==='Work'?workPaneMap(next):null;
-  const workPane=item.domain==='Work'?(insert.placement==='end'?item.workPane:panes.get(target.id)||item.workPane||'left'):'';
+  const panes=domainPaneMap(next,item.domain);
+  const workPane=insert.placement==='end'?validWorkPane(item.workPane):panes.get(target.id)||item.workPane||'left';
   const parentId=insert.placement==='inside'?target.id:insert.placement==='end'?'':target.parentId||'';
-  const moved={...item,parentId,...(item.domain==='Work'?{workPane}:{})};
+  const moved={...item,parentId,workPane};
   next=next.map(entry=>entry.id===moved.id?moved:entry);
-  const samePane=entry=>item.domain!=='Work'||(panes.get(entry.id)||'left')===workPane;
+  const samePane=entry=>(panes.get(entry.id)||'left')===workPane;
   const siblings=treeRows(next,item.domain).map(row=>row.item).filter(entry=>entry.id!==moved.id&&(entry.parentId||'')===parentId&&samePane(entry));
   let index=insert.placement==='before'?siblings.findIndex(entry=>entry.id===target.id):insert.placement==='after'?siblings.findIndex(entry=>entry.id===target.id)+1:siblings.length;
   if(index<0)index=siblings.length;
@@ -266,7 +268,9 @@ function App(){
   const [inboxText,setInboxText]=useState(()=>readStored('rafa-inbox-text','')),[inboxBatches,setInboxBatches]=useState(()=>readStored('rafa-inbox-batches',[])),[inboxBusy,setInboxBusy]=useState(false),[inboxAdopting,setInboxAdopting]=useState(''),[inboxPhase,setInboxPhase]=useState(''),[inboxOpen,setInboxOpen]=useState(false);
   const autoProcessed=useRef(readStored('rafa-inbox-auto-source',''));
   const [layout,setLayout]=useState(readLayout);
-  const board=useRef(null),lowerBoard=useRef(null),inboxInput=useRef(null),resizeCleanup=useRef(null),beforePositions=useRef(null),workScrollRefs=useRef({left:null,right:null,third:null}),scrollSaveFrame=useRef(0),scrollRestored=useRef(false);
+  const board=useRef(null),inboxInput=useRef(null),beforePositions=useRef(null),paneScrollRefs=useRef(new Map()),scrollSaveFrame=useRef(0),restoringScroll=useRef(false),layoutRequest=useRef(0);
+  const scrollPositions=useRef(readStored('rafa-drawer-scroll',null)||Object.fromEntries(Object.entries(readStored('rafa-work-scroll',{})||{}).map(([pane,top])=>['Work:3:'+pane,top])));
+  const layoutRef=useRef(layout);layoutRef.current=layout;
   useLayoutEffect(()=>{
     const input=inboxInput.current;if(!input)return;
     const measure=()=>{
@@ -280,7 +284,11 @@ function App(){
     observer.observe(input);window.addEventListener('resize',measure);
     return()=>{observer.disconnect();window.removeEventListener('resize',measure);};
   },[inboxText,authenticated,loading]);
-  useEffect(()=>()=>resizeCleanup.current?.(),[]);
+  useLayoutEffect(()=>{
+    const node=board.current;if(!node)return;
+    const measure=()=>node.style.setProperty('--drawer-width',Math.max(0,node.clientWidth-3*parseFloat(getComputedStyle(node).getPropertyValue('--rail-size')))+'px');
+    measure();const observer=new ResizeObserver(measure);observer.observe(node);return()=>observer.disconnect();
+  },[authenticated,loading]);
   useLayoutEffect(()=>{
     const previous=beforePositions.current;beforePositions.current=null;
     if(!previous||prefersReducedMotion())return;
@@ -318,7 +326,7 @@ function App(){
     if(!prefersReducedMotion())setTimeout(()=>{const read=node.querySelector('.entry-read');if(read)read.animate([{backgroundColor:'#c9e3c6'},{backgroundColor:getComputedStyle(read).backgroundColor}],{duration:1100,easing:'ease-out'});},300);
   }
 
-  useEffect(()=>{try{localStorage.setItem('rafa-layout-v2',JSON.stringify(layout));}catch{}},[layout]);
+  useEffect(()=>{try{localStorage.setItem('rafa-drawers-v1',JSON.stringify(layout));}catch{}},[layout]);
   useEffect(()=>{
     if(!authenticated)return;
     const refresh=()=>{if(document.visibilityState!=='visible'||saving.current.size||pasteLock.current||focusLock.current||resistLocks.current.size)return;const revision=focusRevision.current;Promise.all([api('/api/entries'),api('/api/focus')]).then(([entries,state])=>{if(saving.current.size||pasteLock.current||focusLock.current||resistLocks.current.size||revision!==focusRevision.current)return;itemsRef.current=entries;setItems(entries);applyFocus(state);}).catch(()=>{});};
@@ -326,13 +334,27 @@ function App(){
     window.addEventListener('focus',refresh);document.addEventListener('visibilitychange',refresh);
     return ()=>{clearInterval(timer);window.removeEventListener('focus',refresh);document.removeEventListener('visibilitychange',refresh);};
   },[authenticated]);
+  useLayoutEffect(()=>{
+    if(!entriesLoaded||loading)return;
+    restoringScroll.current=true;
+    let unlockFrame=0;
+    const frame=requestAnimationFrame(()=>{
+      const domain=layout.active,count=layout.columns[domain];
+      for(const pane of workPanes.slice(0,count)){
+        const key=domain+':'+count+':'+pane,node=paneScrollRefs.current.get(key),top=scrollPositions.current[key];
+        if(node)node.scrollTop=Number.isFinite(top)?top:0;
+      }
+      const horizontal=paneScrollRefs.current.get(domain+':'+count+':x');
+      if(horizontal)horizontal.scrollLeft=scrollPositions.current[domain+':'+count+':x']||0;
+      unlockFrame=requestAnimationFrame(()=>{restoringScroll.current=false;});
+    });
+    return()=>{cancelAnimationFrame(frame);cancelAnimationFrame(unlockFrame);};
+  },[entriesLoaded,loading,layout.active,layout.columns]);
   useEffect(()=>{
-    if(!entriesLoaded||scrollRestored.current)return;
-    scrollRestored.current=true;
-    const saved=readStored('rafa-work-scroll',{})||{};
-    for(const pane of workPanes)requestAnimationFrame(()=>{const node=workScrollRefs.current[pane];if(node&&Number.isFinite(saved[pane]))node.scrollTop=saved[pane];});
-  },[entriesLoaded]);
-  useEffect(()=>()=>{cancelAnimationFrame(scrollSaveFrame.current);},[]);
+    const flush=()=>{try{localStorage.setItem('rafa-drawer-scroll',JSON.stringify(scrollPositions.current));}catch{}};
+    window.addEventListener('pagehide',flush);
+    return()=>{cancelAnimationFrame(scrollSaveFrame.current);window.removeEventListener('pagehide',flush);};
+  },[]);
   useEffect(()=>{try{localStorage.setItem('rafa-inbox-text',JSON.stringify(inboxText));}catch{}},[inboxText]);
   useEffect(()=>{try{localStorage.setItem('rafa-inbox-batches',JSON.stringify(inboxBatches));}catch{}},[inboxBatches]);
   useEffect(()=>{if(!inboxText.trim()||inboxBusy)return;const source=inboxText.trim();if(source===autoProcessed.current)return;const timer=setTimeout(()=>runInboxAI(source),60000);return()=>clearTimeout(timer);},[inboxText,inboxBusy]);
@@ -380,7 +402,7 @@ function App(){
   useEffect(()=>()=>{drag.current?.cleanup?.();},[]);
   useEffect(()=>{
     if(!draft)return;
-    const commit=event=>{if(!event.target.closest('.write-row, .drag-handle, .row-actions, .group-controls, .task-dialog'))save();};
+    const commit=event=>{if(!event.target.closest('.write-row, .drag-handle, .row-actions, .group-controls, .task-dialog, .drawer-rail, .drawer-toggle, .column-count'))save();};
     document.addEventListener('pointerdown',commit);
     return ()=>document.removeEventListener('pointerdown',commit);
   },[draft?.editorKey,draft?.editorSeed,draft?.id,draft?.domain,draft?.workPane]);
@@ -466,7 +488,8 @@ function App(){
     if(draft&&!await save())return;
     const parent=itemsRef.current.find(entry=>entry.id===parentId);
     if(parent?.collapsed){try{replaceItem(await api('/api/entries/'+parent.id,'PUT',{...parent,collapsed:false}));}catch(error){setError(error.message);return;}}
-    const value=item||{domain,title:'',content:'',type:'todo',status:'open',parentId,workPane:domain==='Work'?pane||indexes.workPanes.get(parentId)||'left':''};
+    const value=item||{domain,title:'',content:'',type:'todo',status:'open',parentId,workPane:pane||indexes.panes.get(parentId)||'left'};
+    if(layoutRef.current.active!==value.domain)setLayout(previous=>({...previous,active:value.domain}));
     const seed=item?editLine(item,items):'';editorTextRef.current=seed;setDraft({...value,editorSeed:seed,editorKey:newId()});setError('');
   }
   async function insertNear(item,placement,type){setMenu(null);if(draft&&!await save())return;const prefix=type==='group'?'## ':type==='text'?'> ':'';editorTextRef.current=prefix;setDraft({domain:item.domain,type,status:'open',title:'',content:'',parentId:item.parentId||'',workPane:item.workPane||'',insert:{targetId:item.id,placement},editorSeed:prefix,editorKey:newId()});}
@@ -533,31 +556,28 @@ function App(){
       applyItems(next);
     }catch(e){setError(e.message);}finally{markPending(item.id,false);}
   }
-  function resize(event,axis){
-    if(event.button!==0)return;
-    event.preventDefault();resizeCleanup.current?.();
-    const horizontal=axis==='workHeight',node=horizontal?board.current:lowerBoard.current;
-    const rect=node.getBoundingClientRect(),handle=event.currentTarget;
-    try{handle.setPointerCapture(event.pointerId);}catch{}
-    const move=event=>{
-      const value=horizontal?(event.clientY-rect.top-4)/Math.max(1,rect.height-8)*100:(event.clientX-rect.left)/Math.max(1,rect.width)*100;
-      setLayout(previous=>moveDivider(previous,axis,value));
-    };
-    const finish=()=>{
-      window.removeEventListener('pointermove',move);window.removeEventListener('pointerup',finish);window.removeEventListener('pointercancel',finish);
-      document.body.classList.remove('is-resizing');resizeCleanup.current=null;
-    };
-    resizeCleanup.current=finish;
-    window.addEventListener('pointermove',move);window.addEventListener('pointerup',finish);window.addEventListener('pointercancel',finish);document.body.classList.add('is-resizing');
+  async function settleLayoutDraft(){
+    const operations=[...saving.current.values()];
+    if(draftRef.current)operations.push(save());
+    const results=await Promise.all(operations);
+    return results.every(Boolean);
   }
-  function divider(axis){
-    const horizontal=axis==='workHeight',value=layout[axis],{min,max}=dividerBounds(layout,axis);
-    const label=horizontal?'调整 WORK 与下方栏目的高度':axis==='dailyEnd'?'调整 DAILY 与 LIFE 的宽度':'调整 LIFE 与 GLEAN & IDEA 的宽度';
-    return <div className={'layout-divider '+(horizontal?'layout-divider-horizontal':'layout-divider-vertical')} style={horizontal?undefined:{left:value+'%'}} role="separator" tabIndex={0} aria-label={label} aria-orientation={horizontal?'horizontal':'vertical'} aria-valuemin={Math.round(min)} aria-valuemax={Math.round(max)} aria-valuenow={Math.round(value)} onPointerDown={event=>resize(event,axis)} onKeyDown={event=>{
-      if(!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home'].includes(event.key))return;
-      event.preventDefault();
-      setLayout(previous=>moveDivider(previous,axis,event.key==='Home'?defaultLayout[axis]:previous[axis]+(['ArrowLeft','ArrowUp'].includes(event.key)?-2:2)));
-    }}/>;
+  async function switchDomain(domain){
+    if(suppressClick.current&&!drag.current)return false;
+    const request=++layoutRequest.current;
+    if(!await settleLayoutDraft()||request!==layoutRequest.current)return false;
+    setMenu(null);setPicker('');setConfirmArchive('');
+    setLayout(previous=>({...previous,active:domain}));return true;
+  }
+  async function changeColumns(domain){
+    if(!await settleLayoutDraft())return;
+    setLayout(previous=>cycleColumns(previous,domain));
+  }
+  async function drawerKey(event,domain){
+    if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;
+    event.preventDefault();
+    const index=domains.indexOf(domain),next=event.key==='Home'?domains[0]:event.key==='End'?domains.at(-1):domains[(index+(event.key==='ArrowLeft'?-1:1)+domains.length)%domains.length];
+    if(await switchDomain(next))requestAnimationFrame(()=>document.querySelector('[data-domain="'+next+'"] .drawer-toggle')?.focus());
   }
   async function move(spec){
     if(pending.has('move'))return;
@@ -569,19 +589,29 @@ function App(){
     drag.current?.cleanup?.();
     const blocked=descendantsOf(item.id);blocked.add(item.id);
     const start={x:event.clientX,y:event.clientY},state={id:item.id,active:false};
-    let scrollFrame=0,scrollNode=null,scrollSpeed=0,lastPoint=null;
-    function scroll(){if(scrollNode&&scrollSpeed){const top=scrollNode.scrollTop;scrollNode.scrollBy(0,scrollSpeed);if(top!==scrollNode.scrollTop&&lastPoint)point(lastPoint);}scrollFrame=requestAnimationFrame(scroll);}
+    let scrollFrame=0,scrollNode=null,scrollSpeed=0,lastPoint=null,hoverTimer=0,hoverDomain='',settleFrame=0;
+    function scroll(){if(scrollNode&&scrollSpeed){const top=scrollNode.scrollTop;scrollNode.scrollBy(0,scrollSpeed);if(top!==scrollNode.scrollTop&&lastPoint)point(lastPoint,true);}scrollFrame=requestAnimationFrame(scroll);}
     drag.current=state;
-    function point(event){
+    function point(event,recheck=false){
       lastPoint={clientX:event.clientX,clientY:event.clientY,preventDefault(){}};
       if(!state.active&&Math.hypot(event.clientX-start.x,event.clientY-start.y)<5)return;
       if(!state.active){state.active=true;setDragging(item.id);document.body.classList.add('is-dragging');scrollFrame=requestAnimationFrame(scroll);}
       event.preventDefault();
       const node=document.elementFromPoint(event.clientX,event.clientY);
       const row=node?.closest('[data-entry-id]'),column=node?.closest('[data-domain]');
+      const rail=node?.closest('.drawer-rail'),domain=column?.dataset.domain;
+      if(!rail||domain===layoutRef.current.active){clearTimeout(hoverTimer);hoverDomain='';}
+      else if(!recheck&&hoverDomain!==domain){
+        clearTimeout(hoverTimer);hoverDomain=domain;
+        hoverTimer=setTimeout(async()=>{
+          if(drag.current!==state||!await switchDomain(domain))return;
+          const start=performance.now();
+          const follow=()=>{if(drag.current!==state)return;if(lastPoint)point(lastPoint,true);if(performance.now()-start<550)settleFrame=requestAnimationFrame(follow);};
+          follow();
+        },500);
+      }
       let next=null;
-      if(column){
-        const domain=column.dataset.domain;
+      if(column&&domain===layoutRef.current.active&&!rail){
         const pane=column.dataset.workPane||node?.closest('[data-work-pane]')?.dataset.workPane||'';
         const groupBlock=node?.closest('.group-block');
         if(!row&&groupBlock){const groupRow=groupBlock.querySelector('[data-entry-id]');if(groupRow)next={id:item.id,targetId:groupRow.dataset.entryId,domain,workPane:pane,placement:'inside'};}
@@ -595,9 +625,9 @@ function App(){
         }else if(!next)next={id:item.id,domain,workPane:pane,placement:'end'};
       }
       if(next&&blocked.has(next.targetId))next=null;
-      if(node?.closest('.column-head,.pinned-list,.inbox-wrap,.layout-divider'))next=null;
+      if(node?.closest('.column-head,.pinned-list,.inbox-wrap,.drawer-rail'))next=null;
       currentDrop.current=next;setDrop(next);scrollNode=null;scrollSpeed=0;
-      if(column){
+      if(column&&domain===layoutRef.current.active&&!rail){
         const workColumn=node?.closest('[data-work-pane]'),scroller=workColumn?.querySelector('.work-col-scroll')||column.querySelector('.column-scroll'),box=scroller?.getBoundingClientRect();
         if(box&&scroller){scrollNode=scroller;if(event.clientY<box.top+45)scrollSpeed=-8;if(event.clientY>box.bottom-45)scrollSpeed=8;}
       }
@@ -612,7 +642,7 @@ function App(){
     function escape(event){if(event.key==='Escape'){event.preventDefault();cancel();}}
     function cleanup(){
       window.removeEventListener('pointermove',point);window.removeEventListener('pointerup',finish);window.removeEventListener('pointercancel',cancel);
-      window.removeEventListener('keydown',escape);cancelAnimationFrame(scrollFrame);
+      window.removeEventListener('keydown',escape);cancelAnimationFrame(scrollFrame);cancelAnimationFrame(settleFrame);clearTimeout(hoverTimer);
       document.body.classList.remove('is-dragging');setDragging('');setDrop(null);drag.current=null;currentDrop.current=null;
     }
     state.cleanup=cleanup;
@@ -636,7 +666,8 @@ function App(){
     const parent=all.find(entry=>entry.id===item.parentId);
     if(outdent){if(!parent)return;await move({id:item.id,targetId:parent.id,domain:item.domain,placement:'after'});}
     else{
-      const siblings=treeRows(all,item.domain).filter(row=>(row.item.parentId||'')===(item.parentId||''));
+      const panes=domainPaneMap(all,item.domain);
+      const siblings=treeRows(all,item.domain).filter(row=>(row.item.parentId||'')===(item.parentId||'')&&panes.get(row.item.id)===panes.get(item.id));
       const index=siblings.findIndex(row=>row.item.id===item.id),previous=siblings[index-1]?.item;
       if(!previous)return;await move({id:item.id,targetId:previous.id,domain:item.domain,placement:'inside'});
     }
@@ -684,9 +715,7 @@ function App(){
     </div>;
   }
   function renderTree(domain,pane=''){
-    const allRows=indexes.workRows;
-    const paneRows=domain==='Work'?allRows.filter(({item})=>(indexes.workPanes.get(item.id)||'left')===pane):treeRows(items,domain);
-    const rows=paneRows;
+    const rows=indexes.rows.get(domain).filter(({item})=>(indexes.panes.get(item.id)||'left')===(pane||'left'));
     function renderBranch(parentId='',level=0){return rows.filter(({item})=>(item.parentId||'')===parentId||!parentId&&item.parentId&&!items.some(entry=>entry.id===item.parentId&&entry.domain===domain)).map(({item})=>{
       const children=renderBranch(item.id,item.type==='group'?0:level+1);
       const insertion=draft&&!draft.id&&draft.insert?.targetId===item.id?editor():null;
@@ -706,46 +735,52 @@ function App(){
     }
     return branch(root,0);
   }
-  function paneOf(item){
-    if(item.domain!=='Work')return '';
-    return indexes.workPanes.get(item.id)||'left';
+  function paneOf(item){return indexes.panes.get(item.id)||'left';}
+  function paneAddRow(domain,pane){
+    const sources=visiblePanes(layout.columns[domain],pane);
+    const active=draft&&!draft.id&&!draft.insert&&!draft.parentId&&draft.domain===domain&&sources.includes(draft.workPane||'left');
+    return <div className="add-row">{active?editor():<button onClick={()=>open(null,domain,'',pane)} aria-label={'在 '+domain+' '+workPaneName(pane)+'新增条目'}><Plus size={14}/><span>写一条…</span></button>}</div>;
   }
-  function workAddRow(pane){
-    const active=draft&&!draft.id&&!draft.insert&&!draft.parentId&&draft.domain==='Work'&&(draft.workPane||'left')===pane;
-    return <div className="add-row">{active?editor():<button onClick={()=>open(null,'Work','',pane)} aria-label={'在 WORK '+workPaneName(pane)+'新增条目'}><Plus size={14}/><span>写一条…</span></button>}</div>;
-  }
-  function saveWorkScroll(){
+  function savePaneScroll(domain,count,pane,event){
+    if(restoringScroll.current||layoutRef.current.active!==domain)return;
+    scrollPositions.current[domain+':'+count+':'+pane]=pane==='x'?event.currentTarget.scrollLeft:event.currentTarget.scrollTop;
     cancelAnimationFrame(scrollSaveFrame.current);
     scrollSaveFrame.current=requestAnimationFrame(()=>{
-      const value={};
-      for(const pane of workPanes){const node=workScrollRefs.current[pane];if(node)value[pane]=node.scrollTop;}
-      try{localStorage.setItem('rafa-work-scroll',JSON.stringify(value));}catch{}
+      try{localStorage.setItem('rafa-drawer-scroll',JSON.stringify(scrollPositions.current));}catch{}
     });
   }
-  function workPane(pane){
-    const endDrop=drop?.domain==='Work'&&drop.placement==='end'&&(drop.workPane||'left')===pane;
-    return <div className={'work-col '+(endDrop?'is-end-drop':'')} key={pane} data-work-pane={pane} aria-label={'WORK '+workPaneName(pane)} onDragOver={event=>{if(event.dataTransfer.types.includes('Files'))event.preventDefault();}} onDrop={event=>{const file=Array.from(event.dataTransfer.files).find(file=>file.type.startsWith('image/'));if(file){event.preventDefault();upload(file,{domain:'Work',type:'image',parentId:'',workPane:pane});}}}>
-      <div className="work-col-scroll" ref={node=>{workScrollRefs.current[pane]=node;}} onScroll={saveWorkScroll}>
-        <div className="column-content">{loading?<div className="loading">加载中…</div>:renderTree('Work',pane)}</div>
-        {workAddRow(pane)}
+  function domainPane(domain,pane){
+    const count=layout.columns[domain],key=domain+':'+count+':'+pane;
+    const endDrop=drop?.domain===domain&&drop.placement==='end'&&(drop.workPane||'left')===pane;
+    return <div className={'work-col domain-pane '+(endDrop?'is-end-drop':'')} key={pane} data-work-pane={pane} aria-label={domain+' '+workPaneName(pane)} onDragOver={event=>{if(event.dataTransfer.types.includes('Files'))event.preventDefault();}} onDrop={event=>dropImage(event,domain,pane)}>
+      <div className="work-col-scroll" ref={node=>{if(node)paneScrollRefs.current.set(key,node);else paneScrollRefs.current.delete(key);}} onScroll={event=>savePaneScroll(domain,count,pane,event)}>
+        <div className="column-content">{visiblePanes(count,pane).map(source=><React.Fragment key={source}>{renderTree(domain,source)}</React.Fragment>)}</div>
+        {paneAddRow(domain,pane)}
         {dragging&&endDrop&&<div className="work-end-drop">放到{workPaneName(pane)}末尾</div>}
       </div>
     </div>;
+  }
+  async function dropImage(event,domain,pane='left'){
+    const file=Array.from(event.dataTransfer.files).find(file=>file.type.startsWith('image/'));
+    if(!file)return;
+    event.preventDefault();event.stopPropagation();
+    if(await switchDomain(domain))await upload(file,{domain,type:'image',parentId:'',workPane:pane});
   }
   function pinnedList(domain){
     return items.some(item=>item.domain===domain&&item.pinnedAt)&&<div className={'pinned-list'+(domain==='Work'?' work-pinned-list':'')} aria-label={domain+' 置顶条目'}>{items.filter(item=>item.domain===domain&&item.pinnedAt).sort((a,b)=>a.pinnedAt.localeCompare(b.pinnedAt)).map(item=><div className="pinned-item" key={item.id} onContextMenu={event=>{event.preventDefault();setMenu({x:event.clientX,y:event.clientY,item});}}><PushPin size={13} weight="fill"/><button className="pinned-title" onClick={()=>locatePinned(item)} title={titleOf(item)}><span className="pinned-title-text">{inline(titleOf(item),false)}</span>{item.content&&<span className="pinned-note">{item.content.split('\n').map((line,index)=><span key={index}>{inline(line,false)}</span>)}</span>}<span className="pinned-meta">{item.priority==='urgent'?'!! 紧急':item.priority==='high'?'! 重要':''}{item.owner?' @'+item.owner:''}{item.tags?' '+item.tags.split(/[,，]\s*/).map(tag=>'#'+tag).join(' '):''}{item.dueDate?' 截止 '+item.dueDate:''}</span></button><button className="pinned-unpin" onClick={()=>togglePin(item)} aria-label={'取消置顶 '+titleOf(item)} title="取消置顶"><PushPin size={13} weight="fill"/></button></div>)}</div>;
   }
   function columnSection(domain){
-    return <section className={'column '+(drop?.domain===domain&&drop.placement==='end'?'drop-column':'')} key={domain} data-domain={domain} aria-label={domain}
-      onDragOver={event=>{if(event.dataTransfer.types.includes('Files'))event.preventDefault();}}
-      onDrop={event=>{const file=Array.from(event.dataTransfer.files).find(file=>file.type.startsWith('image/'));if(file){event.preventDefault();upload(file,domain);}}}>
-      <div className="column-watermark" aria-hidden="true">{domain==='Glean & Idea'?<>GLEAN<span>& IDEA</span></>:domain.toUpperCase()}</div>
-      <div className="column-head"><h1>{domain.toUpperCase()}</h1><span>{items.filter(item=>item.domain===domain&&item.type==='todo'&&!['done','removed'].includes(item.status)).length}</span><button className={'column-archive '+(confirmArchive===domain?'confirm-archive':'')} onClick={()=>archiveDomain(domain)} disabled={archiveBusy} aria-label={confirmArchive===domain?'确认归档':'归档 '+domain+' 已完成和已移除的内容'} title={confirmArchive===domain?'再次点击确认归档':'归档本栏'}>{confirmArchive===domain?'确认归档':<Archive size={16}/>}</button></div>
-      {domain!=='Work'&&pinnedList(domain)}
-      {domain==='Work'?<div className="column-scroll work-scroll"><div className="work-cols">{workPanes.map(workPane)}</div></div>:<div className="column-scroll">
-      <div className="column-content">{loading?<div className="loading">加载中…</div>:renderTree(domain)}</div>
-      <div className="add-row">{draft&&!draft.id&&!draft.insert&&!draft.parentId&&draft.domain===domain?editor():<button onClick={()=>open(null,domain)} aria-label={'在 '+domain+' 新增条目'}><Plus size={14}/><span>写一条…</span></button>}</div>
-      </div>}
+    const active=layout.active===domain,count=layout.columns[domain],index=domains.indexOf(domain);
+    const total=items.filter(item=>item.domain===domain&&item.type==='todo'&&!['done','removed'].includes(item.status)).length;
+    const id='drawer-'+index;
+    return <section className={'column drawer '+(active?'is-open ':'')+(drop?.domain===domain&&drop.placement==='end'?'drop-column':'')} key={domain} data-domain={domain} data-open={active} style={{'--drawer-index':index}} aria-label={domain} onDragOver={event=>{if(event.dataTransfer.types.includes('Files'))event.preventDefault();}} onDrop={event=>dropImage(event,domain)}>
+      <button className="drawer-rail" aria-label={'展开 '+domain} aria-expanded={active} aria-controls={id} tabIndex={active?-1:0} aria-hidden={active||undefined} onClick={()=>switchDomain(domain)} onKeyDown={event=>drawerKey(event,domain)}><span className="drawer-number">0{index+1}</span><span className="drawer-rail-title">{domain.toUpperCase()}</span><span className="drawer-rail-count">{total}</span><CaretRight size={14}/></button>
+      <div className="drawer-surface" id={id} inert={!active} aria-hidden={!active}>
+        <div className="column-watermark" aria-hidden="true">{domain==='Glean & Idea'?<>GLEAN<span>& IDEA</span></>:domain.toUpperCase()}</div>
+        <div className="column-head"><button className="drawer-toggle" aria-label={domain+' 已展开'} aria-expanded="true" aria-controls={id} onKeyDown={event=>drawerKey(event,domain)}><span className="drawer-number">0{index+1}</span><h1>{domain.toUpperCase()}</h1></button><span className="drawer-total">{total}</span><div className="column-tools"><button className="column-count" onClick={()=>changeColumns(domain)} aria-label={domain+' 当前'+count+'栏，切换为'+(count%3+1)+'栏'} title="点击切换一栏、两栏、三栏；只改变展示，不改变任务归属"><span className="lane-glyph" aria-hidden="true">{Array.from({length:count},(_,i)=><i key={i}/>)}</span><span>{count} 栏</span></button><button className={'column-archive '+(confirmArchive===domain?'confirm-archive':'')} onClick={()=>archiveDomain(domain)} disabled={archiveBusy} aria-label={confirmArchive===domain?'确认归档':'归档 '+domain+' 已完成和已移除的内容'} title={confirmArchive===domain?'再次点击确认归档':'归档本栏'}>{confirmArchive===domain?'确认归档':<Archive size={16}/>}</button></div></div>
+        {pinnedList(domain)}
+        <div className="column-scroll work-scroll" ref={node=>{const key=domain+':'+count+':x';if(node)paneScrollRefs.current.set(key,node);else paneScrollRefs.current.delete(key);}} onScroll={event=>{if(event.target===event.currentTarget)savePaneScroll(domain,count,'x',event);}}><div className="work-cols" data-columns={count} style={{'--lane-count':count,gridTemplateColumns:'repeat('+count+',minmax(0,1fr))'}}>{workPanes.slice(0,count).map(pane=>domainPane(domain,pane))}</div></div>
+      </div>
     </section>;
   }
   if(authenticated===null||loading)return <div className="auth-screen"><div className="auth-brand"><img className="auth-cat" src="/rafa-cat.png" alt=""/><div className="auth-mark">Rafa<span>todo</span><i/></div></div><span className="auth-loading">正在打开…</span><ErrorNotice message={error} retry={retryAction} onClose={()=>setError('')}/></div>;
@@ -754,12 +789,8 @@ function App(){
     <header className="topbar"><a className="brand" href="/" aria-label="RafaTodo 首页"><img className="brand-cat" src="/rafa-cat.png" alt=""/>Rafa<span>todo</span><i/></a><div className="top-tools"><button className="archive-view" onClick={openArchive} aria-label="查看归档" title="查看归档"><Archive size={18}/></button><button className={'heatmap-trigger '+(heatmapOpen?'active':'')} onClick={()=>setHeatmapOpen(value=>!value)} aria-label="打开活动热力图" title="活动热力图"><ChartBar size={18}/></button></div><Heatmap items={items} open={heatmapOpen} onClose={()=>setHeatmapOpen(false)} onLoopHistory={setLoopHistory}/><ArchiveModal open={archiveOpen} items={archived} onClose={()=>setArchiveOpen(false)} onLoopHistory={setLoopHistory}/></header>
     <ErrorNotice message={error} retry={retryAction} onClose={()=>setError('')}/>
     <div className="workspace">
-      {pinnedList('Work')}
-      <main ref={board} className="board" style={{'--work-height':layout.workHeight+'fr','--bottom-height':(100-layout.workHeight)+'fr'}}>
-        {columnSection('Work')}{divider('workHeight')}
-        <div className="side-board" ref={lowerBoard} style={{gridTemplateColumns:layout.dailyEnd+'% '+(layout.lifeEnd-layout.dailyEnd)+'% minmax(0,1fr)'}}>
-          {domains.filter(domain=>domain!=='Work').map(columnSection)}{divider('dailyEnd')}{divider('lifeEnd')}
-        </div>
+      <main ref={board} className="board drawer-board" aria-label="分类抽屉">
+        {domains.map(columnSection)}
       </main>
       <footer className="inbox-wrap" aria-label="快速收集"><div className="inbox-entry">
         <label className="inbox-label" htmlFor="work-inbox">INBOX</label>

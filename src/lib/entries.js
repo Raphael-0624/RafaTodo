@@ -139,26 +139,30 @@ export function treeRows(entries,domain){
   return result;
 }
 
-// Positions are scoped to one visible list. WORK has three independent lists even
-// though their rows share the same domain, so legacy rows may contain duplicate
-// numbers across panes. Append past every sibling to keep new rows at the end.
+// Positions belong to the persisted lane, not its current folded presentation.
+// Legacy WORK rows may share position numbers across lanes.
 export function nextPosition(entries,{domain,parentId='',workPane=''}){
   const visible=entries.filter(item=>!item.archivedAt);
-  const panes=domain==='Work'?workPaneMap(visible):null,pane=panes?.get(parentId)||validWorkPane(workPane);
-  return Math.max(-1,...visible.filter(item=>item.domain===domain&&(item.parentId||'')===(parentId||'')&&(domain!=='Work'||(panes.get(item.id)||'left')===pane)).map(item=>Number.isFinite(item.position)?item.position:-1))+1;
+  const panes=domainPaneMap(visible,domain),pane=panes.get(parentId)||validWorkPane(workPane);
+  return Math.max(-1,...visible.filter(item=>item.domain===domain&&(item.parentId||'')===(parentId||'')&&(panes.get(item.id)||'left')===pane).map(item=>Number.isFinite(item.position)?item.position:-1))+1;
 }
 
 // Old rows did not store a pane. Assign every root (and its whole subtree) a
 // stable default, while always letting a parent's pane win for its children.
 export function workPaneMap(entries,rows=treeRows(entries,'Work')){
+  return domainPaneMap(entries,'Work',rows);
+}
+
+// Keep the persisted workPane field for compatibility, now in every domain.
+export function domainPaneMap(entries,domain,rows=treeRows(entries,domain)){
   const byId=new Map(entries.map(item=>[item.id,item]));
   const roots=rows.filter(({depth})=>depth===0).map(({item})=>item);
-  const defaults=new Map(roots.map((item,index)=>[item.id,index<Math.ceil(roots.length/2)?'left':'right']));
+  const defaults=new Map(roots.map((item,index)=>[item.id,domain==='Work'&&index>=Math.ceil(roots.length/2)?'right':'left']));
   const panes=new Map(),rootFor=new Map();
   for(const {item} of rows){
     const parent=byId.get(item.parentId);
-    const parentPane=parent?.domain==='Work'?panes.get(parent.id):'';
-    const root=parent?.domain==='Work'&&rootFor.has(parent.id)?rootFor.get(parent.id):item.id;
+    const parentPane=parent?.domain===domain?panes.get(parent.id):'';
+    const root=parent?.domain===domain&&rootFor.has(parent.id)?rootFor.get(parent.id):item.id;
     rootFor.set(item.id,root);
     const ownPane=workPanes.includes(item.workPane)?item.workPane:'';
     panes.set(item.id,parentPane||ownPane||defaults.get(root)||'left');
@@ -170,12 +174,12 @@ export function workPaneMap(entries,rows=treeRows(entries,'Work')){
 // comes from treeRows, so parent/child rendering and sibling order stay intact.
 export function compactEntryPositions(entries){
   const visible=entries.filter(item=>!item.archivedAt);
-  const panes=workPaneMap(visible);
   const positions=new Map();
   for(const domain of new Set(visible.map(item=>item.domain))){
+    const panes=domainPaneMap(visible,domain);
     const counters=new Map();
     for(const {item} of treeRows(visible,domain)){
-      const key=domain+'\u0000'+(domain==='Work'?panes.get(item.id)||'left':'')+'\u0000'+(item.parentId||'');
+      const key=domain+'\u0000'+(panes.get(item.id)||'left')+'\u0000'+(item.parentId||'');
       const position=counters.get(key)||0;
       positions.set(item.id,position);
       counters.set(key,position+1);
@@ -188,12 +192,11 @@ export function compactEntryPositions(entries){
   });
 }
 
-// Persist the computed Work pane on every row, including descendants, before
+// Persist the computed pane on every row, including descendants, before
 // compacting positions. Running this again produces the same layout.
 export function normalizeEntryLayout(entries){
-  const panes=workPaneMap(entries);
+  const panes=new Map(domains.flatMap(domain=>[...domainPaneMap(entries,domain)]));
   const withPanes=entries.map(item=>{
-    if(item.domain!=='Work')return item;
     const workPane=panes.get(item.id)||'left';
     return item.workPane===workPane?item:{...item,workPane};
   });
@@ -201,7 +204,7 @@ export function normalizeEntryLayout(entries){
 }
 
 // Move a whole subtree; siblings retain their order and children retain their parent.
-export function moveEntries(entries,{id,targetId,domain,placement,workPane},panes=workPaneMap(entries)){
+export function moveEntries(entries,{id,targetId,domain,placement,workPane},panes=domainPaneMap(entries,domain)){
   const source=entries.find(item=>item.id===id),target=entries.find(item=>item.id===targetId);
   if(!source||!domains.includes(domain)||!['before','after','inside','end'].includes(placement))throw new Error('移动位置无效');
   if(placement!=='end'&&(!target||target.domain!==domain))throw new Error('目标条目不存在');
@@ -210,15 +213,15 @@ export function moveEntries(entries,{id,targetId,domain,placement,workPane},pane
   collect(id);
   if(descendants.has(targetId))throw new Error('不能移到自己或自己的子条目中');
   const parentId=placement==='inside'?targetId:placement==='end'?'':target.parentId||'';
-  const destinationPane=domain==='Work'?(placement==='end'?validWorkPane(workPane):panes.get(target.id)||'left'):'';
-  const inDestinationPane=item=>domain!=='Work'||panes.get(item.id)===destinationPane;
+  const destinationPane=placement==='end'?validWorkPane(workPane):panes.get(target.id)||'left';
+  const inDestinationPane=item=>panes.get(item.id)===destinationPane;
   const siblingIds=treeRows(entries,domain).map(row=>row.item).filter(item=>!item.archivedAt&&!descendants.has(item.id)&&(item.parentId||'')===parentId&&inDestinationPane(item)).map(item=>item.id);
   let index=placement==='inside'||placement==='end'?siblingIds.length:siblingIds.indexOf(targetId)+(placement==='after'?1:0);
   siblingIds.splice(index,0,id);
   const next=entries.map(item=>{
     if(!siblingIds.includes(item.id)&&!descendants.has(item.id))return item;
     const nextParent=item.id===id?parentId:item.parentId;
-    return {...item,...(descendants.has(item.id)?{domain,...(domain==='Work'?{workPane:destinationPane}:{})}:{}),...(item.id===id?{parentId:nextParent}:{}),...(siblingIds.includes(item.id)?{position:siblingIds.indexOf(item.id)}:{})};
+    return {...item,...(descendants.has(item.id)?{domain,workPane:destinationPane}:{}),...(item.id===id?{parentId:nextParent}:{}),...(siblingIds.includes(item.id)?{position:siblingIds.indexOf(item.id)}:{})};
   });
   return next;
 }

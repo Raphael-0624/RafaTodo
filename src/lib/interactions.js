@@ -20,7 +20,7 @@ export function selectedSubtrees(entries,ids){
 }
 
 export function batchMoveEntries(entries,ids,domain,workPane){
-  if(!domains.includes(domain)||(domain==='Work'&&!workPanes.includes(workPane)))throw new Error('请选择目标栏目');
+  if(!domains.includes(domain)||(domain==='Work'||workPane)&&!workPanes.includes(workPane))throw new Error('请选择目标栏目');
   const {roots,affected}=selectedSubtrees(entries,ids);
   let next=entries;
   for(const item of roots)next=moveEntries(next,{id:item.id,domain,workPane,placement:'end'});
