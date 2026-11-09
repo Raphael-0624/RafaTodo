@@ -4,6 +4,7 @@ import {Plus,ArrowUpRight,Check,TextT,LinkSimple,ImageSquare,DotsSixVertical,Dot
 import {domains,parseLine,toLine,treeRows,workPaneMap,pasteLink,workPanes,workPaneName,validWorkPane} from './lib/entries.js';
 import {dropPlacement,pastedLines} from './lib/interactions.js';
 import {TaskDialog,LoopHistoryDialog} from './components/TaskDialogs.jsx';
+import {ResistHistoryDialog} from './components/ResistHistoryDialog.jsx';
 import {normalizeLayout,moveDivider,dividerBounds,defaultLayout} from './lib/layout.js';
 import {focusElapsed,focusClock} from './lib/focus.js';
 import {ImagePreviewProvider,PreviewImage} from './components/ImagePreview.jsx';
@@ -79,6 +80,10 @@ function ErrorNotice({message,retry,onClose}){
   </div>;
 }
 function LoopLabel({item,onHistory}){
+  if(item.type==='todo'&&item.resist){
+    const Tag=onHistory?'button':'span';
+    return <Tag className="resist-label" {...(onHistory?{type:'button',title:'查看克制打卡记录',onClick:event=>{event.stopPropagation();onHistory(item);},onKeyDown:event=>event.stopPropagation()}: {})}><span>克制 | 今日{item.resistToday||0}次</span>{' '}<span>· 累计{item.resistTotal||0}次</span></Tag>;
+  }
   if(item.type!=='todo'||!['day','week'].includes(item.loop))return null;
   const Tag=onHistory?'button':'span';
   return <Tag className={'loop-label loop-'+item.loop} {...(onHistory?{type:'button',title:'查看完成记录',onClick:event=>{event.stopPropagation();onHistory(item);},onKeyDown:event=>event.stopPropagation()}: {})}>{item.loop==='day'?'每日':'每周'} | {item.loopCompletedCount||0}次</Tag>;
@@ -250,6 +255,9 @@ function App(){
   const [heatmapOpen,setHeatmapOpen]=useState(false);
   const [archiveOpen,setArchiveOpen]=useState(false),[archived,setArchived]=useState([]),[archiveBusy,setArchiveBusy]=useState(false);
   const [loopHistory,setLoopHistory]=useState(null);
+  const [resistNotice,setResistNotice]=useState(null);
+  const resistLocks=useRef(new Set());
+  useEffect(()=>{if(!resistNotice)return;const timer=setTimeout(()=>setResistNotice(null),8000);return()=>clearTimeout(timer);},[resistNotice]);
   const [pasteChoice,setPasteChoice]=useState(null),[pasteBusy,setPasteBusy]=useState(false);
   const pasteLock=useRef(false);
   const [zen,setZen]=useState(null),[zenNow,setZenNow]=useState(Date.now()),[zenConfirm,setZenConfirm]=useState('');
@@ -313,7 +321,7 @@ function App(){
   useEffect(()=>{try{localStorage.setItem('rafa-layout-v2',JSON.stringify(layout));}catch{}},[layout]);
   useEffect(()=>{
     if(!authenticated)return;
-    const refresh=()=>{if(document.visibilityState!=='visible'||saving.current.size||pasteLock.current||focusLock.current)return;const revision=focusRevision.current;Promise.all([api('/api/entries'),api('/api/focus')]).then(([entries,state])=>{if(saving.current.size||pasteLock.current||focusLock.current||revision!==focusRevision.current)return;itemsRef.current=entries;setItems(entries);applyFocus(state);}).catch(()=>{});};
+    const refresh=()=>{if(document.visibilityState!=='visible'||saving.current.size||pasteLock.current||focusLock.current||resistLocks.current.size)return;const revision=focusRevision.current;Promise.all([api('/api/entries'),api('/api/focus')]).then(([entries,state])=>{if(saving.current.size||pasteLock.current||focusLock.current||resistLocks.current.size||revision!==focusRevision.current)return;itemsRef.current=entries;setItems(entries);applyFocus(state);}).catch(()=>{});};
     const timer=setInterval(refresh,30000);
     window.addEventListener('focus',refresh);document.addEventListener('visibilitychange',refresh);
     return ()=>{clearInterval(timer);window.removeEventListener('focus',refresh);document.removeEventListener('visibilitychange',refresh);};
@@ -462,6 +470,18 @@ function App(){
     const seed=item?editLine(item,items):'';editorTextRef.current=seed;setDraft({...value,editorSeed:seed,editorKey:newId()});setError('');
   }
   async function insertNear(item,placement,type){setMenu(null);if(draft&&!await save())return;const prefix=type==='group'?'## ':type==='text'?'> ':'';editorTextRef.current=prefix;setDraft({domain:item.domain,type,status:'open',title:'',content:'',parentId:item.parentId||'',workPane:item.workPane||'',insert:{targetId:item.id,placement},editorSeed:prefix,editorKey:newId()});}
+  async function recordResist(item,recordId=newId(),remove=false){
+    if(resistLocks.current.has(item.id))return;
+    resistLocks.current.add(item.id);focusRevision.current++;markPending(item.id,true);setError('');
+    try{
+      if(draft&&!await save())return;
+      const result=await api('/api/entries/'+encodeURIComponent(item.id)+'/resist-records'+(remove?'/'+encodeURIComponent(recordId):''),remove?'DELETE':'POST',remove?undefined:{recordId});
+      replaceItem(result.item,{animate:false});
+      if(remove)setResistNotice(current=>current?.recordId===recordId?null:current);
+      else if(!result.record.deletedAt)setResistNotice({item:result.item,recordId});
+    }catch(error){setError(error.message,()=>recordResist(item,recordId,remove));}
+    finally{resistLocks.current.delete(item.id);markPending(item.id,false);}
+  }
   async function updateStatus(item,status=item.status==='done'?'open':'done'){
     if(pending.has(item.id))return;
     if(draft){const saved=await save();if(!saved)return;if(saved.id===item.id)item=saved;}
@@ -644,12 +664,12 @@ function App(){
     const tasks=items.filter(entry=>entry.id!==item.id&&descendants.has(entry.id)&&entry.type==='todo'&&entry.status!=='removed');
     const target=drop?.targetId===item.id?drop.placement:'';
     const timeTitle=[['createdAt','创建'],['updatedAt','更新'],['completedAt','完成'],['removedAt','移除']].filter(([key])=>item[key]).map(([key,name])=>name+'：'+new Date(item[key]).toLocaleString('zh-CN',{hour12:false})).join('\n');
-    return <div key={item.id} className={'entry '+(done?'is-done ':'')+(item.status==='doing'?'is-doing ':'')+(removed?'is-removed ':'')+(group?'is-group ':'')+(divider?'is-divider ':'')+(item.url?'has-link ':'')+(item.pinnedAt?'is-pinned ':'')+(dragging===item.id?'drag-source ':'')+(target?'drop-'+target:'')} data-entry-id={floating?undefined:item.id} data-focus-entry-id={floating?item.id:undefined} data-depth={depth} style={{'--depth':depth}} onPointerDown={event=>{if(floating||event.target.closest('button,a,textarea,input,.row-actions,.group-controls,.group-picker'))return;beginDrag(event,item);}} onClick={event=>{if(event.target.closest('button,a,textarea,.entry-body,.row-actions,.group-controls,.group-picker')||editing)return;open(item);}} onContextMenu={event=>{if(event.target.closest('textarea'))return;event.preventDefault();setMenu({x:event.clientX, y:event.clientY,item});}}>
+    return <div key={item.id} className={'entry '+(done?'is-done ':'')+(item.status==='doing'?'is-doing ':'')+(item.resist?'is-resist ':'')+(removed?'is-removed ':'')+(group?'is-group ':'')+(divider?'is-divider ':'')+(item.url?'has-link ':'')+(item.pinnedAt?'is-pinned ':'')+(dragging===item.id?'drag-source ':'')+(target?'drop-'+target:'')} data-entry-id={floating?undefined:item.id} data-focus-entry-id={floating?item.id:undefined} data-depth={depth} style={{'--depth':depth}} onPointerDown={event=>{if(floating||event.target.closest('button,a,textarea,input,.row-actions,.group-controls,.group-picker'))return;beginDrag(event,item);}} onClick={event=>{if(event.target.closest('button,a,textarea,.entry-body,.row-actions,.group-controls,.group-picker')||editing)return;open(item);}} onContextMenu={event=>{if(event.target.closest('textarea'))return;event.preventDefault();setMenu({x:event.clientX, y:event.clientY,item});}}>
       {target&&<span className="drop-placement-note" aria-hidden="true">{target==='inside'?'缩进为子条目':target==='before'?'同级 · 插到前面':'同级 · 插到整组后面'}</span>}
       {!floating&&<button className="drag-handle" title="拖动排序；中部缩进，边缘同级插入" aria-label={'拖动 '+titleOf(item)} onPointerDown={event=>{event.stopPropagation();beginDrag(event,item);}}><DotsSixVertical size={14}/></button>}
       {editing?editor():<div className="entry-read">
         {!group&&descendants.size>0&&<button className={'group-toggle task-toggle '+(item.collapsed?'collapsed':'')} aria-label={(item.collapsed?'展开':'收起')+descendants.size+' 个子条目'} aria-expanded={!item.collapsed} disabled={pending.has(item.id)} onClick={()=>configureGroup(item,{collapsed:!item.collapsed})}><CaretDown size={13}/></button>}
-        {group?<><button className={'group-toggle '+(item.collapsed?'collapsed':'')} aria-label={item.collapsed?'展开分组':'收起分组'} aria-expanded={!item.collapsed} onClick={()=>configureGroup(item,{collapsed:!item.collapsed})}><CaretDown size={15}/></button><button className="group-signature" title="选择分组图标和底色" onClick={()=>setPicker(picker===item.id?'':item.id)}>{item.signature||'🌿'}</button>{picker===item.id&&<div className="group-picker"><div>{['🌿','📌','📝','🚀','💡','🏠','💼'].map(signature=><button key={signature} aria-label={'图标 '+signature} onClick={()=>{configureGroup(item,{signature});setPicker('');}}>{signature}</button>)}</div><div>{['sage','sand','blue','rose','none'].map(tone=><button className={'tone-swatch tone-'+tone} key={tone} aria-label={'底色 '+tone} onClick={()=>{configureGroup(item,{tone});setPicker('');}}/>)}</div></div>}</>:divider?<span className="kind-mark">—</span>:item.type==='todo'?<button className={'checkbox '+(done?'checked':'')} aria-label={done?'重新打开任务':'完成任务'} onClick={()=>updateStatus(item)} disabled={pending.has(item.id)}>{done&&<Check size={11} weight="bold"/>}{removed&&<span>−</span>}</button>:<span className="kind-mark">{item.type==='text'?<TextT size={15}/>:item.type==='link'?<LinkSimple size={15}/>:item.type==='bullet'?<span>•</span>:<ImageSquare size={15}/>}</span>}
+        {group?<><button className={'group-toggle '+(item.collapsed?'collapsed':'')} aria-label={item.collapsed?'展开分组':'收起分组'} aria-expanded={!item.collapsed} onClick={()=>configureGroup(item,{collapsed:!item.collapsed})}><CaretDown size={15}/></button><button className="group-signature" title="选择分组图标和底色" onClick={()=>setPicker(picker===item.id?'':item.id)}>{item.signature||'🌿'}</button>{picker===item.id&&<div className="group-picker"><div>{['🌿','📌','📝','🚀','💡','🏠','💼'].map(signature=><button key={signature} aria-label={'图标 '+signature} onClick={()=>{configureGroup(item,{signature});setPicker('');}}>{signature}</button>)}</div><div>{['sage','sand','blue','rose','none'].map(tone=><button className={'tone-swatch tone-'+tone} key={tone} aria-label={'底色 '+tone} onClick={()=>{configureGroup(item,{tone});setPicker('');}}/>)}</div></div>}</>:divider?<span className="kind-mark">—</span>:item.type==='todo'&&item.resist?<span className="resist-mark" aria-hidden="true">◇</span>:item.type==='todo'?<button className={'checkbox '+(done?'checked':'')} aria-label={done?'重新打开任务':'完成任务'} onClick={()=>updateStatus(item)} disabled={pending.has(item.id)}>{done&&<Check size={11} weight="bold"/>}{removed&&<span>−</span>}</button>:<span className="kind-mark">{item.type==='text'?<TextT size={15}/>:item.type==='link'?<LinkSimple size={15}/>:item.type==='bullet'?<span>•</span>:<ImageSquare size={15}/>}</span>}
         <div className={'entry-body '+(item.url?'linked-body':'')} title={timeTitle} role="button" tabIndex={0} onClick={event=>{if(event.target.closest('a'))return;open(item);}} onKeyDown={event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();open(item);}}} aria-label={'编辑 '+titleOf(item)}>
           <EntryContent item={item} items={items} onLoopHistory={setLoopHistory}/>
         </div>
@@ -657,7 +677,8 @@ function App(){
 
         </div>}
         <div className={'row-actions'+(item.type==='todo'?' task-actions':'')}>
-          <button className="row-menu-trigger" title={item.type==='todo'?focusLabel(item)+' · 更多操作':'更多操作'} aria-label={'更多操作：'+titleOf(item)} aria-haspopup="menu" aria-expanded={menu?.item?.id===item.id} disabled={pending.has(item.id)} onClick={event=>{event.stopPropagation();const rect=event.currentTarget.getBoundingClientRect();setMenu(menu?.item?.id===item.id?null:{x:rect.right-180,y:rect.bottom+4,item,kind:'row'});}}>{item.type==='todo'&&!['done','removed'].includes(item.status)&&focus.activeId!==item.id&&Object.hasOwn(focus.elapsed,item.id)?<span className="task-resume">继续</span>:<DotsThree size={17} weight="bold"/>}</button>
+          {item.type==='todo'&&item.resist&&<button className="resist-add" aria-label={'克制成功 +1：'+titleOf(item)} title="每次成功克制，奖励自己 +1" disabled={pending.has(item.id)||removed} onClick={()=>recordResist(item)}>+1</button>}
+          <button className="row-menu-trigger" title={item.type==='todo'&&!item.resist?focusLabel(item)+' · 更多操作':'更多操作'} aria-label={'更多操作：'+titleOf(item)} aria-haspopup="menu" aria-expanded={menu?.item?.id===item.id} disabled={pending.has(item.id)} onClick={event=>{event.stopPropagation();const rect=event.currentTarget.getBoundingClientRect();setMenu(menu?.item?.id===item.id?null:{x:rect.right-180,y:rect.bottom+4,item,kind:'row'});}}>{item.type==='todo'&&!item.resist&&!['done','removed'].includes(item.status)&&focus.activeId!==item.id&&Object.hasOwn(focus.elapsed,item.id)?<span className="task-resume">继续</span>:<DotsThree size={17} weight="bold"/>}</button>
         </div>
       </div>}
     </div>;
@@ -758,7 +779,8 @@ function App(){
         <button disabled={focusBusy} onClick={()=>finishFocus('pause')}>暂停</button>
       </div></footer>
     </section>}
-    {loopHistory&&<LoopHistoryDialog key={loopHistory.id} item={loopHistory} onClose={()=>setLoopHistory(null)}/>}
+    {loopHistory&&(loopHistory.resist?<ResistHistoryDialog key={loopHistory.id} item={items.find(item=>item.id===loopHistory.id)||loopHistory} busy={pending.has(loopHistory.id)} onDelete={(item,id)=>recordResist(item,id,true)} onClose={()=>setLoopHistory(null)}/>:<LoopHistoryDialog key={loopHistory.id} item={loopHistory} onClose={()=>setLoopHistory(null)}/>)}
+    {resistNotice&&<div className="resist-toast" role="status"><span>克制成功 +1</span><button disabled={pending.has(resistNotice.item.id)} onClick={()=>recordResist(resistNotice.item,resistNotice.recordId,true)}>撤销</button><button aria-label="关闭打卡提示" onClick={()=>setResistNotice(null)}>×</button></div>}
     {pasteChoice&&<TaskDialog title="粘贴多行内容" busy={pasteBusy} onClose={()=>setPasteChoice(null)} onAfterClose={pasteChoice.focus}>
       <div className="task-dialog-body">{error&&<p className="dialog-error" role="alert">{error}</p>}<p>保留在一个条目中，还是将编辑框内容按非空行拆分？</p><pre className="paste-preview">{pasteChoice.text}</pre><p className="dialog-hint">共 {pastedLines(pasteChoice.text).length} 条。{draft?.id?'第一条保留原任务及其子任务，其余紧随其后。':'保留当前栏目、分栏和缩进位置。'} 拆分后各行按原有输入语法识别。</p>{pastedLines(pasteChoice.text).length>200&&<p className="dialog-error">一次最多拆分 200 条，请保留为一条或分批粘贴。</p>}</div>
       <footer className="task-dialog-actions"><button disabled={pasteBusy} onClick={()=>setPasteChoice(null)}>取消粘贴</button><button disabled={pasteBusy} onClick={()=>{pasteChoice.applySingle();setPasteChoice(null);}}>保留一条</button><button className="dialog-primary" disabled={pasteBusy||pastedLines(pasteChoice.text).length>200} onClick={splitPaste}>{pasteBusy?'拆分中…':'按行拆分'}</button></footer>
@@ -777,15 +799,15 @@ function App(){
     {zen&&focusRoot&&zen.id===focus.activeId&&(()=>{const root=items.find(item=>item.id===zen.id);if(!root)return null;const rows=zenTree(root);return <div className="zen-screen" role="dialog" aria-modal="true" aria-label="ZEN 专注模式"><div className="zen-atmosphere" aria-hidden="true"><i/><i/><i/><i/></div><div className="zen-content"><div className="zen-label">ZEN <span>{root.domain.toUpperCase()}</span></div><div className="zen-timer" aria-live="off">{focusClock(elapsed)}</div><div className="zen-tree">{rows.map(({item,depth})=><article className={'zen-task '+(item.status==='done'?'is-done':'')} key={item.id} style={{'--zen-depth':depth}}><div className="zen-task-line"><span className="zen-mark">{item.status==='done'?'✓':item.type==='group'?'◇':'·'}</span><div className="zen-task-body"><h1>{inline(titleOf(item))}</h1>{item.content&&<p>{zenDescription(item.content)}</p>}{item.image&&<PreviewImage className="zen-main-image" src={item.image} alt={item.title||'任务图片'}/>}</div></div>{zenMetadata(item).length>0&&<div className="zen-meta">{zenMetadata(item).map((value,index)=><span key={index}>{value}</span>)}</div>}{item.url&&<a href={item.url} target="_blank" rel="noreferrer">{item.url}</a>}</article>)}</div><div className="zen-actions"><button className={'zen-done '+(zenConfirm==='done'?'confirming':'')} onClick={()=>finishZen('done')} disabled={focusBusy}>{zenConfirm==='done'?'确认完成？':<><Check size={16}/>完成</>}</button>{zenConfirm==='done'?<button onClick={()=>setZenConfirm('')} disabled={focusBusy}>取消</button>:<button className="zen-hold" onClick={()=>finishZen('hold')} disabled={focusBusy}>搁置</button>}</div></div></div>})()}
     {dragging&&<div className="drag-caption" role="status">{drop?.placement==='inside'?'成为「'+titleOf(byId.get(drop.targetId))+'」的子条目':drop?.placement==='end'?(drop.domain==='Work'?'移到 WORK '+workPaneName(drop.workPane)+'末尾':'移到 '+drop.domain+' 末尾'):drop?'插到「'+titleOf(byId.get(drop.targetId))+'」'+(drop.placement==='before'?'之前':'之后')+'（同级）':'此处不可放置'} · Esc 取消</div>}
     {menu&&<div className={'context-menu '+(menu.kind==='row'?'row-menu':'')} role="menu" style={{left:Math.max(8,Math.min(menu.x,window.innerWidth-190)),top:Math.min(menu.y,window.innerHeight-(menu.kind==='row'?270:220))}} onPointerDown={event=>event.stopPropagation()} onKeyDown={event=>{if(event.key==='Escape'){event.preventDefault();setMenu(null);}}}>
-      {menu.item.type==='todo'&&<button role="menuitem" disabled={focusBusy||['done','removed'].includes(menu.item.status)} onClick={()=>startFocus(menu.item)}>{focusLabel(menu.item)}</button>}
+      {menu.item.type==='todo'&&!menu.item.resist&&<button role="menuitem" disabled={focusBusy||['done','removed'].includes(menu.item.status)} onClick={()=>startFocus(menu.item)}>{focusLabel(menu.item)}</button>}
       {menu.kind==='row'?<>
-        {menu.item.type!=='divider'&&<button role="menuitem" disabled={focusBusy||['done','removed'].includes(menu.item.status)} onClick={()=>startZen(menu.item)}>ZEN 专注</button>}
+        {menu.item.type!=='divider'&&<button role="menuitem" disabled={menu.item.resist||focusBusy||['done','removed'].includes(menu.item.status)} onClick={()=>startZen(menu.item)}>ZEN 专注</button>}
         <button role="menuitem" disabled={pending.has(menu.item.id)} onClick={()=>togglePin(menu.item)}>{menu.item.pinnedAt?'取消置顶':'置顶'}</button>
         <button role="menuitem" disabled={pending.has(menu.item.id)} onClick={()=>{updateStatus(menu.item,menu.item.status==='removed'?'open':'removed');setMenu(null);}}>{menu.item.status==='removed'?'恢复条目':'取消条目'}</button>
         <span className="context-separator"/>
         <button role="menuitem" className={confirmDelete===menu.item.id?'confirm-delete':''} disabled={pending.has(menu.item.id)} onClick={()=>{if(confirmDelete===menu.item.id){deleteItem(menu.item);setMenu(null);}else setConfirmDelete(menu.item.id);}}>{confirmDelete===menu.item.id?'再次点击确认删除':'永久删除'}</button>
       </>:<>
-        <button disabled={focusBusy||['done','removed'].includes(menu.item.status)} onClick={()=>startZen(menu.item)}>ZEN 专注</button>
+        <button disabled={menu.item.resist||focusBusy||['done','removed'].includes(menu.item.status)} onClick={()=>startZen(menu.item)}>ZEN 专注</button>
         <button onClick={()=>insertNear(menu.item,'before','group')}>在上方插入标题</button><button onClick={()=>insertNear(menu.item,'after','group')}>在下方插入标题</button>
         <button onClick={()=>togglePin(menu.item)}>{menu.item.pinnedAt?'取消 PIN':'PIN 置顶'}</button>
         <button onClick={()=>insertNear(menu.item,'after','todo')}>插入任务</button><button onClick={()=>{setMenu(null);open(null,menu.item.domain,menu.item.id);}}>插入子任务</button>

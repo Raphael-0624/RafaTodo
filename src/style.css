@@ -122,6 +122,19 @@ button:focus-visible,a:focus-visible,[role="button"]:focus-visible,textarea:focu
 .loop-label{gap:3px;padding:0 7px;border:1px solid #b8d3d0;border-radius:4px;background:#eaf5f3;color:#31706c;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:.04em}
 .loop-label::before{content:'';width:4px;height:4px;border-radius:50%;background:currentColor}
 .loop-label.loop-week{border-color:#c6cbe0;background:#f0f1f9;color:#555f94}
+.resist-label{display:inline-block;max-width:100%;margin-right:6px;padding:1px 7px;border:1px solid #dacba9;border-radius:4px;background:#faf3df;color:#8c6c32;font-size:10px;font-weight:650;line-height:1.5;vertical-align:middle;white-space:normal;font-variant-numeric:tabular-nums;cursor:pointer}
+.resist-label:hover{background:#f2e8cc}
+.resist-label>span{white-space:nowrap}
+.resist-mark{width:15px;flex:0 0 15px;margin-top:2px;color:#a58a51;text-align:center}
+.row-actions .resist-add{width:auto;min-width:32px;height:24px;padding:1px 6px;margin-right:3px;border:1px solid #dacba9;border-radius:5px;background:#faf3df;color:#8c6c32;font-size:11px;font-weight:650}
+.row-actions .resist-add:hover:not(:disabled){background:#f0e3bf;color:#785820}
+.resist-toast{position:fixed;z-index:90;left:50%;bottom:65px;transform:translateX(-50%);display:flex;align-items:center;gap:16px;max-width:calc(100vw - 24px);padding:10px 12px 10px 18px;border:1px solid #d9c99f;border-radius:10px;background:#fcf8eb;color:#80652e;box-shadow:0 6px 24px #52421e1a;font-size:12px;white-space:nowrap}
+.resist-toast button{min-height:32px;color:#84662c;text-decoration:underline;text-underline-offset:3px}
+.resist-toast button:last-child{min-width:26px;font-size:18px;text-decoration:none}
+.resist-history-day{margin:18px 0}.resist-history-day h3{font-size:11px;color:#8f845f;font-weight:500}
+.resist-history-day ul{list-style:none;padding:0;margin:0}.resist-history-day li{display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid #ece9df;font-size:12px;color:#817049}
+.resist-history-day time{color:#9c998a;font-variant-numeric:tabular-nums}.resist-history-day li button{margin-left:auto;min-height:32px;color:#a59c86;font-size:11px}
+@media(max-width:720px){.is-resist>.entry-read{flex-wrap:wrap}.is-resist>.entry-read>.entry-body{flex-basis:100%;order:2}.is-resist>.entry-read>.row-actions{margin-left:auto}.row-actions .resist-add{min-height:30px;min-width:30px;margin-top:0;padding:0 3px}.resist-toast button,.resist-history-day li button{min-height:44px}.resist-toast{gap:10px}}
 .entry-note{font-size:12px;line-height:1.45;color:#8e978a;white-space:pre-wrap;overflow-wrap:anywhere}
 .entry-meta{display:flex;align-items:baseline;gap:2px 7px;flex-wrap:wrap;color:#9ca593;font-size:10px;line-height:1.5}
 .entry-meta:empty{display:none}

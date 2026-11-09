@@ -58,6 +58,14 @@ db.exec(`
     PRIMARY KEY (entry_id, loop_kind, period_key)
   );
   CREATE INDEX IF NOT EXISTS loop_completions_entry_idx ON loop_completions(entry_id);
+  CREATE TABLE IF NOT EXISTS resist_records (
+    id TEXT PRIMARY KEY,
+    entry_id TEXT NOT NULL,
+    recorded_at TEXT NOT NULL,
+    date TEXT NOT NULL,
+    deleted_at TEXT
+  );
+  CREATE INDEX IF NOT EXISTS resist_records_entry_idx ON resist_records(entry_id,recorded_at DESC,id DESC);
   CREATE INDEX IF NOT EXISTS entries_archived_at_idx ON entries(json_extract(data, '$.archivedAt'));
   CREATE INDEX IF NOT EXISTS entries_domain_idx ON entries(json_extract(data, '$.domain'));
   CREATE INDEX IF NOT EXISTS entries_pinned_at_idx ON entries(json_extract(data, '$.pinnedAt'));
@@ -190,6 +198,13 @@ function loopCompletedCount(item) {
 }
 
 function hydrateLoopEntry(item, now = new Date(), records) {
+  for (const key of ['resistToday', 'resistTotal']) delete item[key];
+  if (item.type === 'todo' && item.resist) {
+    const today = loopPeriodKey('day', now, 'Asia/Shanghai');
+    const counts = records?.resist || db.prepare('SELECT COUNT(*) AS total,COALESCE(SUM(date=?),0) AS today FROM resist_records WHERE entry_id=? AND deleted_at IS NULL').get(today, item.id);
+    item.resistToday = counts.today;
+    item.resistTotal = counts.total;
+  }
   if (item.type !== 'todo' || !['day', 'week'].includes(item.loop)) {
     item.loop = '';
     item.loopPeriod = '';
@@ -228,7 +243,13 @@ function hydrateLoopEntries(items, now = new Date()) {
       record.periods.set(row.periodKey, row);
     }
   }
-  for (const item of items) hydrateLoopEntry(item, now, records.get(item.id) || {total: 0, periods: new Map()});
+  const resistCounts = new Map();
+  const resistIds = items.filter(item => item.type === 'todo' && item.resist).map(item => item.id);
+  for (let offset = 0; offset < resistIds.length; offset += 400) {
+    const chunk = resistIds.slice(offset, offset + 400);
+    for (const row of db.prepare(`SELECT entry_id,COUNT(*) AS total,COALESCE(SUM(date=?),0) AS today FROM resist_records WHERE entry_id IN (${chunk.map(() => '?').join(',')}) AND deleted_at IS NULL GROUP BY entry_id`).all(loopPeriodKey('day', now, 'Asia/Shanghai'), ...chunk)) resistCounts.set(row.entry_id, row);
+  }
+  for (const item of items) hydrateLoopEntry(item, now, {...(records.get(item.id) || {total: 0, periods: new Map()}), resist: resistCounts.get(item.id) || {total: 0, today: 0}});
   return items;
 }
 
@@ -514,6 +535,7 @@ app.delete('/api/entries/:id', (req, res) => {
     db.prepare('DELETE FROM entries WHERE id=?').run(deleted.id);
     db.prepare('DELETE FROM loop_completions WHERE entry_id=?').run(deleted.id);
     db.prepare('DELETE FROM focus_timers WHERE entry_id=?').run(deleted.id);
+    db.prepare('DELETE FROM resist_records WHERE entry_id=?').run(deleted.id);
     for (const id of linkedIds) {
       const currentRow = db.prepare('SELECT data FROM entries WHERE id=?').get(id);
       if (!currentRow) continue;
@@ -565,7 +587,7 @@ app.post('/api/focus', (req, res) => {
       const row = db.prepare('SELECT data FROM entries WHERE id=?').get(id);
       if (!row) throw new Error('任务已不存在');
       const item = hydrateLoopEntry(JSON.parse(row.data));
-      if (item.archivedAt || item.type === 'divider' || ['done', 'removed'].includes(item.status)) throw new Error('已完成、取消或归档的条目不能计时');
+      if (item.resist || item.archivedAt || item.type === 'divider' || ['done', 'removed'].includes(item.status)) throw new Error('克制打卡、已完成、取消或归档的条目不能计时');
       focusState();
       const active = db.prepare('SELECT * FROM focus_timers WHERE running_since IS NOT NULL').get();
       if (action === 'start') {
@@ -585,7 +607,7 @@ app.post('/api/focus', (req, res) => {
         for (const entry of entries) {
           if (!descendants.has(entry.id)) continue;
           const patch = {};
-          if (entry.type === 'todo' && !['done', 'removed'].includes(entry.status)) patch.status = 'done';
+          if (entry.type === 'todo' && !entry.resist && !['done', 'removed'].includes(entry.status)) patch.status = 'done';
           if (entry.id === id) {
             if (entry.type !== 'todo') patch.status = active.previous_status;
             patch.content = [entry.content, '#ZEN 耗时' + focusDuration(elapsed)].filter(Boolean).join('\n');
@@ -601,6 +623,52 @@ app.post('/api/focus', (req, res) => {
 app.get('/api/entries', (req, res) => {
   res.json(unarchivedEntries());
 });
+function resistEntry(id) {
+  const row = db.prepare('SELECT data FROM entries WHERE id=?').get(id);
+  if (!row) throw new Error('条目已不存在');
+  const item = JSON.parse(row.data);
+  if (item.type !== 'todo' || !item.resist || item.archivedAt) throw new Error('这不是有效的克制打卡条目');
+  return item;
+}
+
+app.get('/api/entries/:id/resist-records', (req, res) => {
+  try {
+    const item = hydrateLoopEntry(resistEntry(req.params.id));
+    const offset = Math.max(0, Math.floor(Number(req.query.offset) || 0)), limit = 50;
+    const records = db.prepare('SELECT id,recorded_at AS recordedAt,date FROM resist_records WHERE entry_id=? AND deleted_at IS NULL ORDER BY recorded_at DESC,id DESC LIMIT ? OFFSET ?').all(item.id, limit, offset);
+    res.json({item, timeZone: 'Asia/Shanghai', records, nextOffset: offset + records.length < item.resistTotal ? offset + records.length : null});
+  } catch (error) { res.status(400).json({error: error.message}); }
+});
+app.post('/api/entries/:id/resist-records', (req, res) => {
+  const recordId = req.body?.recordId;
+  if (typeof recordId !== 'string' || !/^[A-Za-z0-9_-]{8,100}$/.test(recordId)) return res.status(400).json({error: '打卡请求标识无效'});
+  try {
+    const result = transaction(() => {
+      const item = resistEntry(req.params.id);
+      if (item.status === 'removed') throw new Error('请先恢复条目再打卡');
+      const now = new Date();
+      const old = db.prepare('SELECT entry_id FROM resist_records WHERE id=?').get(recordId);
+      if (old && old.entry_id !== item.id) throw new Error('打卡请求标识冲突');
+      // Keep deleted records as tombstones: retrying an undone request must not add it again.
+      if (!old) db.prepare('INSERT INTO resist_records(id,entry_id,recorded_at,date) VALUES (?,?,?,?)').run(recordId, item.id, now.toISOString(), loopPeriodKey('day', now, 'Asia/Shanghai'));
+      return {item: hydrateLoopEntry(item), record: db.prepare('SELECT id,recorded_at AS recordedAt,date,deleted_at AS deletedAt FROM resist_records WHERE id=?').get(recordId)};
+    });
+    res.json(result);
+  } catch (error) { res.status(400).json({error: error.message}); }
+});
+app.delete('/api/entries/:id/resist-records/:recordId', (req, res) => {
+  try {
+    const item = transaction(() => {
+      const item = resistEntry(req.params.id);
+      const record = db.prepare('SELECT entry_id FROM resist_records WHERE id=?').get(req.params.recordId);
+      if (!record || record.entry_id !== item.id) throw new Error('打卡记录不存在');
+      db.prepare('UPDATE resist_records SET deleted_at=COALESCE(deleted_at,?) WHERE id=?').run(new Date().toISOString(), req.params.recordId);
+      return hydrateLoopEntry(item);
+    });
+    res.json({item});
+  } catch (error) { res.status(400).json({error: error.message}); }
+});
+
 app.get('/api/entries/:id/loop-history', (req, res) => {
   if (!db.prepare('SELECT 1 FROM entries WHERE id=?').get(req.params.id)) return res.status(404).json({error: '条目不存在'});
   const offset = Math.max(0, Math.floor(Number(req.query.offset) || 0));
@@ -624,8 +692,8 @@ app.post('/api/archive', (req, res) => {
     }
     const eligible = new Map();
     function canArchive(item, visiting = new Set()) {
-      // Keeping recurring children visible also prevents their ancestors from being archived.
-      if (item.type === 'todo' && ['day', 'week'].includes(item.loop)) return false;
+      // Recurring and resist children also protect their ancestors from archive.
+      if (item.type === 'todo' && (item.resist || ['day', 'week'].includes(item.loop))) return false;
       if (eligible.has(item.id)) return eligible.get(item.id);
       if (visiting.has(item.id)) return false;
       visiting.add(item.id);
@@ -801,6 +869,7 @@ function updateStoredEntry(old, patch, now = new Date().toISOString()) {
   const oldCompleted = hydratedOld.status === 'done';
   const oldLoop = ['day', 'week'].includes(old.loop) ? old.loop : '';
   const item = {...old, ...patch, id: old.id, createdAt: old.createdAt, updatedAt: now};
+  if (item.resist && ['done', 'doing', 'waiting'].includes(item.status)) throw new Error('克制打卡请使用 +1，不支持完成或计时状态');
   if (item.type !== 'todo' || !['day', 'week'].includes(item.loop)) item.loop = '';
   const loopKindChanged = Boolean(oldLoop && item.loop && oldLoop !== item.loop);
   if (loopKindChanged) {
@@ -830,6 +899,9 @@ app.put('/api/entries/:id', (req, res) => {
   catch (error) { res.status(400).json({error: error.message}); }
 });
 function storeEntry(item, onSaved) {
+  if (item.resist !== undefined && typeof item.resist !== 'boolean') throw new Error('克制打卡设置无效');
+  if (item.resist && (item.type !== 'todo' || item.loop || !['open', 'removed'].includes(item.status))) throw new Error('克制打卡仅支持非循环任务，请使用 +1 记录');
+  for (const key of ['resistToday', 'resistTotal']) delete item[key];
   if (item.type === 'todo' && item.status === 'done') item.pinnedAt = '';
   if (item.type !== 'divider' && !(item.title?.trim() || item.content?.trim() || item.url || item.image)) throw new Error('请填写内容');
   if (!domains.includes(item.domain) || !types.includes(item.type) || !['open', 'doing', 'waiting', 'done', 'removed'].includes(item.status) || typeof item.title !== 'string' || item.title.length > 1000 || typeof item.content !== 'string' || item.content.length > 50000) throw new Error('请检查条目内容');

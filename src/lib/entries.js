@@ -28,7 +28,7 @@ function matchLink(value){
 // A plain line is a task. Only explicit notation creates metadata.
 export function parseLine(raw,base={},entries=[]){
   let text=raw.trim(),type='todo',status=base.status||'open',typeExplicit=false;
-  if(/^---+$/.test(text))return {...base,type:'divider',title:'',content:'',status:'open',url:'',image:'',owner:'',people:'',tags:'',priority:'normal',prefixLabel:'',custom:{},dependencies:[],related:[]};
+  if(/^---+$/.test(text))return {...base,type:'divider',title:'',content:'',status:'open',url:'',image:'',owner:'',people:'',tags:'',priority:'normal',prefixLabel:'',loop:'',resist:false,custom:{},dependencies:[],related:[]};
   const group=text.match(/^##\s+([\s\S]+)$/);
   if(group){type='group';typeExplicit=true;text=group[1].trim();}
   const bullet=text.match(/^-\s+(.+)$/);
@@ -36,11 +36,12 @@ export function parseLine(raw,base={},entries=[]){
   const mark=text.match(/^-?\s*\[([ xX-])\]\s*/);
   if(mark){status=mark[1]==='-'?'removed':/x/i.test(mark[1])?'done':'open';text=text.slice(mark[0].length);}
   else if(/^>\s?/.test(text)){type='text';typeExplicit=true;text=text.replace(/^>\s?/,'');}
-  const metadata={owner:'',people:'',tags:'',priority:'normal',dueDate:'',planDate:'',followupDate:'',stage:'',prefixLabel:'',loop:'',loopCompletedCount:Number.isFinite(base.loopCompletedCount)?base.loopCompletedCount:0,loopCompletionKey:base.loopCompletionKey||'',loopPeriod:base.loopPeriod||'',custom:{},dependencies:[],related:[]};
+  const metadata={owner:'',people:'',tags:'',priority:'normal',dueDate:'',planDate:'',followupDate:'',stage:'',prefixLabel:'',loop:'',resist:false,loopCompletedCount:Number.isFinite(base.loopCompletedCount)?base.loopCompletedCount:0,loopCompletionKey:base.loopCompletionKey||'',loopPeriod:base.loopPeriod||'',custom:{},dependencies:[],related:[]};
   // A loop marker is task-only metadata. It is removed from the title wherever
   // it appears, so it also works before or after a "%label" prefix.
   const consumeLoop=()=>{if(type!=='todo')return;const found=text.match(/(?:^|\s)!loop-(day|week)(?=\s|$)/);if(!found)return;metadata.loop=found[1];text=(text.slice(0,found.index)+' '+text.slice(found.index+found[0].length)).trim();};
   consumeLoop();
+  if(type==='todo')text=text.replace(/^!resist(?:\s+|$)/,()=>{metadata.resist=true;return '';});
   const prefix=text.match(/^%([\p{L}\p{N}_/-]+)(?:\s+|$)/u);
   if(prefix){metadata.prefixLabel=prefix[1];text=text.slice(prefix[0].length);}
   // A prefix is display metadata, not part of the title. Also removes a
@@ -52,6 +53,7 @@ export function parseLine(raw,base={},entries=[]){
   const protectedParts=[];
   text=text.replace(/`[^`\n]+`|!?\[[^\]\n]*\]\([^\s)]+\)/g,value=>{protectedParts.push(value);return '\u0000'+(protectedParts.length-1)+'\u0000';});
   const consume=(regex,callback)=>{text=text.replace(regex,(...args)=>{callback(...args);return '';});};
+  if(type==='todo')consume(/(?:^|\s)!resist(?=\s|$)/g,()=>{metadata.resist=true;});
   const target=title=>entries.find(item=>item.id!==base.id&&item.title===title)?.id;
   consume(/(?:^|\s)after:\[\[([^\]]+)\]\]/g,(_,title)=>{const id=target(title);if(!id)throw new Error('找不到前置任务：'+title);metadata.dependencies.push(id);});
   consume(/(?:^|\s)\[\[([^\]]+)\]\]/g,(_,title)=>{const id=target(title);if(!id)throw new Error('找不到关联条目：'+title);metadata.related.push(id);});
@@ -82,6 +84,8 @@ export function parseLine(raw,base={},entries=[]){
   else if(link&&text===link[0]&&type==='todo'&&!mark&&!typeExplicit&&!(base.id&&base.type==='todo')){type='link';url=link[2];text=link[1];}
   else if(bareUrl&&type==='todo'){url=bareUrl[0];if(!mark&&!typeExplicit&&!(base.id&&base.type==='todo'))type='link';}
   metadata.owner=people[0]||'';metadata.people=people.slice(1).join(', ');metadata.tags=[...new Set(tags)].join(', ');
+  if(type!=='todo')metadata.resist=false;
+  if(metadata.resist){if(metadata.loop)throw new Error('克制打卡不能同时设置每日或每周循环');status=status==='removed'?'removed':'open';}
   if(type!=='todo'||!['day','week'].includes(metadata.loop)){metadata.loop='';metadata.loopCompletedCount=0;metadata.loopCompletionKey='';metadata.loopPeriod='';}
   const lines=text.trim().split('\n');
   return {...base,...metadata,type,status,signature,tone,title:lines.shift()?.trim()||'',content:lines.join('\n').trim(),url,image:imageUrl};
@@ -115,6 +119,7 @@ export function toLine(item,entries=[],{hideTaskPrefix=false}={}){
   if(item.priority==='high')tokens.push('!');
   if(item.priority==='urgent')tokens.push('!!');
   if(item.type==='todo'&&['day','week'].includes(item.loop))tokens.push('!loop-'+item.loop);
+  if(item.type==='todo'&&item.resist)tokens.push('!resist');
   if(['doing','waiting'].includes(item.status))tokens.push('~'+item.status);
   if(item.type==='group'&&item.signature)tokens.push('sig:'+item.signature);
   if(item.type==='group'&&item.tone)tokens.push('tone:'+item.tone);

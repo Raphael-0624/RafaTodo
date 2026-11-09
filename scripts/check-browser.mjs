@@ -33,7 +33,15 @@ async function evaluate(expression){
   return result.result.value;
 }
 const until=(expression,label)=>waitFor(()=>evaluate(expression),label||expression);
-const click=selector=>evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`);
+const click=async selector=>{
+  await until(`document.querySelector(${JSON.stringify(selector)})&&!document.querySelector(${JSON.stringify(selector)}).disabled`,'Clickable '+selector);
+  await evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`);
+};
+async function reload(){
+  const previous=await evaluate('performance.timeOrigin');
+  await send('Page.reload');
+  await until(`performance.timeOrigin!==${previous}&&document.readyState==='complete'`,'New page loaded');
+}
 const button=text=>evaluate(`Array.from(document.querySelectorAll('dialog[open] button')).find(node=>node.textContent.trim()===${JSON.stringify(text)}).click()`);
 const row=id=>'[data-entry-id="'+id+'"]';
 async function screenshot(name){
@@ -68,7 +76,7 @@ try{
     const empty=await api('/api/entries',{type:'todo',domain:'Life',title:'Empty history task',content:'',loop:'day'});
     return {parent:parent.id,child:child.id,sibling:sibling.id,weekly:weekly.id,empty:empty.id};
   })()`);
-  await send('Page.reload');await until('!!document.querySelector(".board")','board');
+  await reload();await until('!!document.querySelector(".board")','board');
   await until(`!!document.querySelector(${JSON.stringify(row(ids.child))})`,'child visible');
   assert.equal(await evaluate('!!document.querySelector(".work-pinned-list")'),false,'No empty pinned area');
   await click(row(ids.child)+' .row-menu-trigger');
@@ -80,7 +88,7 @@ try{
   await click(row(ids.parent)+' .task-toggle');
   await until(`!document.querySelector(${JSON.stringify(row(ids.child))})`,'child folded');
   await until(`fetch('/api/entries').then(response=>response.json()).then(items=>items.find(item=>item.id===${JSON.stringify(ids.parent)}).collapsed===true)`,'fold saved');
-  await send('Page.reload');await until(`!!document.querySelector(${JSON.stringify(row(ids.parent)+' .task-toggle[aria-expanded="false"]')})`,'fold persists');
+  await reload();await until(`!!document.querySelector(${JSON.stringify(row(ids.parent)+' .task-toggle[aria-expanded="false"]')})`,'fold persists');
   await click(row(ids.parent)+' .task-toggle');await until(`!!document.querySelector(${JSON.stringify(row(ids.child))})`);
 
   // Clicking the counter must open history, not the surrounding inline editor.
@@ -123,7 +131,7 @@ try{
   await until(`document.querySelector('.side-board>.column:last-of-type').getBoundingClientRect().width<${lowerBefore[2].width-50}`,'LIFE width drag');
   checkGeometry(await geometry());
   const savedLayout=await evaluate('localStorage.getItem("rafa-layout-v2")');
-  await send('Page.reload');await until('!!document.querySelector(".board")');
+  await reload();await until('!!document.querySelector(".board")');
   assert.equal(await evaluate('localStorage.getItem("rafa-layout-v2")'),savedLayout,'Divider settings persist');
   const persisted=await geometry();checkGeometry(persisted);
   assert.ok(Math.abs(persisted.work.height-(before.work.height-100))<3);
@@ -148,7 +156,7 @@ try{
   await send('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter'});
   await send('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter'});
   await until('Array.from(document.querySelectorAll("[data-work-pane=third] .entry-title")).some(node=>node.textContent==="Third pane task")');
-  await send('Page.reload');await until('!!document.querySelector(".board")');
+  await reload();await until('!!document.querySelector(".board")');
   await until('Array.from(document.querySelectorAll("[data-work-pane=third] .entry-title")).some(node=>node.textContent==="Third pane task")');
   assert.equal(await evaluate(`document.querySelector(${JSON.stringify(row(ids.parent))}).closest('[data-work-pane]').dataset.workPane`),'left');
   assert.equal(await evaluate(`document.querySelector(${JSON.stringify(row(ids.weekly))}).closest('[data-work-pane]').dataset.workPane`),'right');
@@ -207,7 +215,7 @@ try{
       if(!response.ok)throw Error('Scroll fixture failed');
     }
   })()`);
-  await send('Page.reload');await until('document.querySelectorAll(".entry").length>200');
+  await reload();await until('document.querySelectorAll(".entry").length>200');
   checkGeometry(await geometry());
   const scrolls=await evaluate(`(()=>{
     const nodes=[...document.querySelectorAll('.work-col-scroll,.side-board .column-scroll')];
@@ -216,7 +224,7 @@ try{
   assert.equal(scrolls.length,6);assert.ok(scrolls.every(value=>value.scrollable&&value.moved&&value.independent),'All six lists scroll independently');
   await evaluate(`document.querySelector('[data-work-pane="third"] .work-col-scroll').scrollTop=90`);
   await until('JSON.parse(localStorage.getItem("rafa-work-scroll"))?.third===90','Third pane scroll saved');
-  await send('Page.reload');
+  await reload();
   await until('document.querySelector("[data-work-pane=third] .work-col-scroll")?.scrollTop===90','Third pane scroll restored');
   await click(row(ids.parent)+' .task-toggle');
   await until(`!document.querySelector(${JSON.stringify(row(ids.child))})`,'Fold before locating a pin');
@@ -249,7 +257,7 @@ try{
   const running=await focusState();assert.equal(running.activeId,ids.parent);
   const initialClock=await evaluate('document.querySelector(".focus-timer").textContent');
   await until(`document.querySelector('.focus-timer').textContent!==${JSON.stringify(initialClock)}`,'Timer ticks');
-  await send('Page.reload');await until('!!document.querySelector(".focus-card")','Float restores on reload');
+  await reload();await until('!!document.querySelector(".focus-card")','Float restores on reload');
   assert.equal((await focusState()).runningSince,running.runningSince,'Reload does not reset timing');
   await evaluate(`Promise.all(document.querySelector('.focus-card').getAnimations().map(animation=>animation.finished))`);
   await screenshot('focus-card');
@@ -261,7 +269,7 @@ try{
   await floatButton('暂停');await until('!document.querySelector(".focus-card")','Pause hides the card');
   const pausedFocus=await focusState();assert.equal(pausedFocus.activeId,'');assert.ok(pausedFocus.elapsed[ids.parent]>=1000);
   await pause(1100);assert.equal((await focusState()).elapsed[ids.parent],pausedFocus.elapsed[ids.parent]);
-  await send('Page.reload');
+  await reload();
   await until(`document.querySelector(${JSON.stringify(row(ids.parent)+' .row-menu-trigger')})?.textContent==='继续'`,'Paused entry survives reload');
   assert.equal(await evaluate(`document.querySelector(${JSON.stringify(row(ids.parent)+' .row-menu-trigger')}).textContent`),'继续');
   await taskAction(ids.parent,'继续');await until('!!document.querySelector(".focus-card")');
@@ -289,7 +297,7 @@ try{
     await post('/api/archive',{domain:'Life'});
     return {image:image.id,archived:archived.id,url};
   })()`);
-  await send('Page.reload');await until(`!!document.querySelector(${JSON.stringify(row(imageIds.image)+' .thumb')})`);
+  await reload();await until(`!!document.querySelector(${JSON.stringify(row(imageIds.image)+' .thumb')})`);
   const imageSelector=row(imageIds.image)+' .thumb';
   async function openImage(selector){
     const point=await evaluate(`(()=>{const node=document.querySelector(${JSON.stringify(selector)});node.scrollIntoView({block:'center',behavior:'instant'});const r=node.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);
@@ -345,8 +353,56 @@ try{
   await click('.zen-done');
   await until('!document.querySelector(".zen-screen,.focus-card")','ZEN completion stops the shared timer');
   assert.equal((await focusState()).activeId,'');
+  await click('[data-work-pane="third"] .add-row button');
+  await until('!!document.querySelector(".write-row textarea")');
+  await send('Input.insertText',{text:'不刷短视频 !resist'});
+  await send('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter'});
+  await send('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter'});
+  const resistId=await until(`fetch('/api/entries').then(response=>response.json()).then(items=>items.find(item=>item.title==='不刷短视频'&&item.resist)?.id)`,'Create habit with !resist');
+  await reload();await until(`!!document.querySelector(${JSON.stringify(row(resistId)+' .resist-add')})`);
+  const resistRow=row(resistId),resistLabel=resistRow+' .resist-label';
+  assert.equal(await evaluate(`!!document.querySelector(${JSON.stringify(resistRow+' .checkbox')})`),false,'Habits do not have completion checkboxes');
+  const resistCount=()=>evaluate(`document.querySelector(${JSON.stringify(resistLabel)}).textContent`);
+  assert.ok((await resistCount()).includes('今日0次 · 累计0次'));
+  await click(resistRow+' .resist-add');
+  await until(`document.querySelector(${JSON.stringify(resistLabel)}).textContent.includes('累计1次')`,'+1 records a success');
+  assert.equal(await evaluate('!!document.querySelector(".write-row")'),false,'+1 never opens editing');
+  await click('.resist-toast button');
+  await until(`document.querySelector(${JSON.stringify(resistLabel)}).textContent.includes('累计0次')`,'Undo removes only that success');
+  await click(resistRow+' .resist-add');
+  await until(`document.querySelector(${JSON.stringify(resistLabel)}).textContent.includes('累计1次')`);
+  await click(resistRow+' .resist-add');
+  await until(`document.querySelector(${JSON.stringify(resistLabel)}).textContent.includes('累计2次')`,'Several successes in one day');
+  await click(resistLabel);await until('!!document.querySelector(".resist-history-day")','Habit history');
+  assert.equal(await evaluate('document.querySelectorAll(".resist-history-day li").length'),2);
+  await click('.resist-history-day li button');
+  await until('document.querySelectorAll(".resist-history-day li").length===1','Delete a mistaken history record');
+  assert.ok((await resistCount()).includes('累计1次'));
+  await click('dialog[open] [aria-label="关闭"]');
+  // Simulate a response lost after the server saved it; the explicit retry must reuse its ID.
+  await evaluate(`(()=>{const original=window.fetch;window.fetch=async(...args)=>{if(args[0].includes('/resist-records')&&args[1]?.method==='POST'){window.fetch=original;await original(...args);throw Error('Simulated lost response');}return original(...args);};})()`);
+  await click(resistRow+' .resist-add');
+  await until('!!document.querySelector(".toast-retry")','Lost response offers retry');
+  await click('.toast-retry');
+  await until(`document.querySelector(${JSON.stringify(resistLabel)}).textContent.includes('累计2次')`,'Retry does not count twice');
+  await evaluate(`(async()=>{
+    const request=async(url,method,body)=>{const response=await fetch(url,{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if(!response.ok)throw Error(await response.text());};
+    const id=${JSON.stringify(resistId)};
+    await request('/api/entries/'+id,'PUT',{resist:false});
+    await request('/api/focus','POST',{action:'start',id});
+    await request('/api/focus','POST',{action:'pause',id});
+    await request('/api/entries/'+id,'PUT',{resist:true});
+  })()`);
+  await reload();await until(`document.querySelector(${JSON.stringify(resistLabel)})?.textContent.includes('今日2次 · 累计2次')`,'Habit counts survive reload');
+  assert.equal(await evaluate(`document.querySelector(${JSON.stringify(resistRow+' .row-menu-trigger')}).textContent.includes('继续')`),false,'Converting a paused task to a habit hides the focus resume shortcut');
+  await taskAction(resistId,'ZEN 专注');
+  assert.equal(await evaluate('!!document.querySelector(".zen-screen,.focus-card")'),false,'Habits cannot start ZEN');
+  await evaluate(`document.querySelector('.context-menu').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))`);
+  await evaluate(`document.querySelector(${JSON.stringify(resistRow)}).scrollIntoView({block:'center',behavior:'instant'})`);
+  assert.ok(await evaluate(`(()=>{const entry=document.querySelector(${JSON.stringify(resistRow)}),label=entry.querySelector('.resist-label').getBoundingClientRect(),add=entry.querySelector('.resist-add').getBoundingClientRect(),pane=entry.closest('.work-col').getBoundingClientRect();return label.width>70&&label.left>=pane.left&&label.right<=pane.right&&add.left>=pane.left&&add.right<=pane.right;})()`),'Mobile habit label and +1 stay readable within their pane');
+  await screenshot('mobile-resist');
   assert.deepEqual(errors,[],'Browser runtime errors');
-  console.log('PASS: desktop/mobile layout, pinned area, scrolling, INBOX, task interactions, image preview, floating focus, pause/resume and shared ZEN timing');
+  console.log('PASS: desktop/mobile layout, task interactions, image preview, shared focus/ZEN and resist creation, +1, undo, history and retry');
 }finally{
   ws?.close();
   for(const child of [browser,app])if(child&&child.exitCode===null){const exited=new Promise(resolve=>child.once('exit',resolve));child.kill();await Promise.race([exited,pause(3000)]);}
