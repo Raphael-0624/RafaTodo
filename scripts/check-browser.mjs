@@ -86,6 +86,28 @@ try{
     return {parent:parent.id,child:child.id,sibling:sibling.id,weekly:weekly.id,empty:empty.id};
   })()`);
   await reload();await until('!!document.querySelector(".board")','board');
+  assert.equal(await evaluate(`(async()=>{
+    const fonts=await document.fonts.load('29px "Patrick Hand"');
+    return fonts.length===1&&fonts[0].status==='loaded'&&getComputedStyle(document.querySelector('.drawer-toggle h1')).fontFamily.includes('Patrick Hand');
+  })()`),true,'Handwritten headings use the bundled font, not a platform fallback');
+  assert.equal(await evaluate(`Promise.all(['sketch-rule','sketch-divider','sketch-highlight','sketch-frame','sketch-checkbox'].map(async name=>{
+    const image=new Image();image.src='/'+name+'.svg';await image.decode();return image.naturalWidth>0;
+  })).then(results=>results.every(Boolean))`),true,'All sketch strokes load without external services');
+  assert.ok(await evaluate(`getComputedStyle(document.querySelector('.drawer-toggle h1'),'::after').backgroundImage.includes('sketch-highlight.svg')`),'Title marker stroke is visible');
+  assert.ok(await evaluate(`getComputedStyle(document.querySelector('.drawer .checkbox')).backgroundImage.includes('sketch-checkbox.svg')`),'Tasks use hand-drawn checkboxes');
+  assert.equal(await evaluate(`[...document.querySelectorAll('.column-count')].every(node=>node.textContent.trim()===''&&node.getAttribute('aria-label')?.includes('切换为'))`),true,'Column controls show only icons and keep accessible labels');
+  assert.equal(await evaluate(`[...document.querySelectorAll('.drawer-rail')].every(node=>getComputedStyle(node,'::before').content==='none')`),true,'Collapsed drawer titles have no oversized frame');
+  assert.equal(await evaluate(`[...document.querySelectorAll('.drawer-rail')].every(node=>{
+    const path=node.querySelector('.drawer-tab-shape path');
+    return getComputedStyle(node).backgroundColor==='rgba(0, 0, 0, 0)'&&path?.getAttribute('d').includes('C')&&getComputedStyle(path).fill!=='none';
+  })`),true,'Folded rail fill and outline share a curved SVG silhouette');
+  assert.equal(await evaluate(`[...document.querySelectorAll('.column-count')].every(node=>{
+    const style=getComputedStyle(node);return style.borderWidth==='0px'&&style.backgroundColor==='rgba(0, 0, 0, 0)'&&getComputedStyle(node,'::before').content==='none';
+  })`),true,'Column switchers are unframed icons');
+  assert.equal(await evaluate(`document.querySelectorAll('.drawer-number').length`),0,'Expanded and collapsed domain titles have no ordinal numbers');
+  assert.equal(await evaluate(`[...document.querySelectorAll('.app>.topbar,.drawer .column-head,.drawer .work-col')].every(node=>{
+    const style=getComputedStyle(node);return style.borderBottomWidth==='0px'&&style.borderRightWidth==='0px';
+  })`),true,'Sketch separators do not have an underlying straight CSS border');
   await until(`!!document.querySelector(${JSON.stringify(row(ids.child))})`,'child visible');
   assert.equal(await evaluate('!!document.querySelector(".work-pinned-list")'),false,'No empty pinned area');
   await click(row(ids.child)+' .row-menu-trigger');
@@ -133,6 +155,7 @@ try{
   for(const expected of [1,2,3]){
     await click(drawer('Work')+' .column-count');
     await until(`document.querySelector('[data-domain=Work] .work-cols').dataset.columns==='${expected}'`,'Cycle WORK lanes');
+    assert.equal(await evaluate(`document.querySelectorAll('[data-domain=Work] .column-count .lane-glyph i').length`),expected,'Column icon reflects the selected number of lanes');
     for(const id of Object.values(ids).filter(id=>id!==ids.empty))assert.equal(await evaluate(`document.querySelectorAll(${JSON.stringify(row(id))}).length`),1,'Folding never hides or duplicates tasks');
     assert.deepEqual(await evaluate(`fetch('/api/entries').then(response=>response.json()).then(items=>items.map(({id,workPane,parentId,position})=>({id,workPane,parentId,position})))`),originalLayout,'Column switches do not rewrite task ownership or order');
   }

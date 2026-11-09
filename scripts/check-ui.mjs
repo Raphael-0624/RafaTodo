@@ -8,6 +8,10 @@ import {defaultLayout,normalizeLayout,cycleColumns,visiblePanes} from '../src/li
 import {selectedSubtrees,batchMoveEntries,dropPlacement,pastedLines} from '../src/lib/interactions.js';
 
 const source=readFileSync(new URL('../src/main.jsx',import.meta.url),'utf8');
+for(const name of ['sketch-rule','sketch-divider']){
+  const svg=readFileSync(new URL('../public/'+name+'.svg',import.meta.url),'utf8');
+  assert.equal((svg.match(/<path\b/g)||[]).length,1,'Separators have one curved stroke without a shadow line');
+}
 assert.deepEqual(normalizeLayout(null),defaultLayout);
 assert.deepEqual(normalizeLayout({workHeight:Infinity,dailyEnd:'20',lifeEnd:NaN}),defaultLayout);
 assert.deepEqual(normalizeLayout({active:'unknown',columns:{Work:0,Daily:'2',Life:Infinity}}),defaultLayout);
