@@ -1,10 +1,11 @@
 import React,{useState,useEffect,useLayoutEffect,useRef} from 'react';
 import {createRoot} from 'react-dom/client';
-import {Plus,ArrowUpRight,Check,TextT,LinkSimple,ImageSquare,DotsSixVertical,DotsThree,X,Trash,ArrowCounterClockwise,CaretDown,CaretRight,ChartBar,Archive,PushPin,MagicWand} from '@phosphor-icons/react';
+import {Plus,ArrowUpRight,Check,TextT,LinkSimple,ImageSquare,DotsSixVertical,DotsThree,X,Trash,ArrowCounterClockwise,CaretDown,CaretRight,ChartBar,Archive,PushPin,MagicWand,BookOpen} from '@phosphor-icons/react';
 import {domains,parseLine,toLine,treeRows,domainPaneMap,pasteLink,workPanes,workPaneName,validWorkPane} from './lib/entries.js';
 import {dropPlacement,pastedLines} from './lib/interactions.js';
 import {TaskDialog,LoopHistoryDialog} from './components/TaskDialogs.jsx';
 import {ResistHistoryDialog} from './components/ResistHistoryDialog.jsx';
+import {CheatSheetDialog} from './components/CheatSheetDialog.jsx';
 import {normalizeLayout,cycleColumns,visiblePanes} from './lib/layout.js';
 import {focusElapsed,focusClock} from './lib/focus.js';
 import {ImagePreviewProvider,PreviewImage} from './components/ImagePreview.jsx';
@@ -255,6 +256,7 @@ function App(){
   const saving=useRef(new Map()),editorTextRef=useRef(''),draftRef=useRef(null);draftRef.current=draft;
   const [picker,setPicker]=useState('');
   const [heatmapOpen,setHeatmapOpen]=useState(false);
+  const [cheatSheetOpen,setCheatSheetOpen]=useState(false);
   const [archiveOpen,setArchiveOpen]=useState(false),[archived,setArchived]=useState([]),[archiveBusy,setArchiveBusy]=useState(false);
   const [loopHistory,setLoopHistory]=useState(null);
   const [resistNotice,setResistNotice]=useState(null);
@@ -402,7 +404,7 @@ function App(){
   useEffect(()=>()=>{drag.current?.cleanup?.();},[]);
   useEffect(()=>{
     if(!draft)return;
-    const commit=event=>{if(!event.target.closest('.write-row, .drag-handle, .row-actions, .group-controls, .task-dialog, .drawer-rail, .drawer-toggle, .column-count'))save();};
+    const commit=event=>{if(!event.target.closest('.write-row, .drag-handle, .row-actions, .group-controls, .task-dialog, .drawer-rail, .drawer-toggle, .column-count, .cheatsheet-trigger'))save();};
     document.addEventListener('pointerdown',commit);
     return ()=>document.removeEventListener('pointerdown',commit);
   },[draft?.editorKey,draft?.editorSeed,draft?.id,draft?.domain,draft?.workPane]);
@@ -786,8 +788,9 @@ function App(){
   if(authenticated===null||loading)return <div className="auth-screen"><div className="auth-brand"><img className="auth-cat" src="/rafa-cat.png" alt=""/><div className="auth-mark">Rafa<span>todo</span><i/></div></div><span className="auth-loading">正在打开…</span><ErrorNotice message={error} retry={retryAction} onClose={()=>setError('')}/></div>;
   if(!authenticated)return <div className="auth-screen"><form className="auth-form" onSubmit={login}><div className="auth-brand"><img className="auth-cat" src="/rafa-cat.png" alt=""/><div className="auth-mark">Rafa<span>todo</span><i/></div></div><div className="auth-input"><input id="password" type="password" autoFocus autoComplete="current-password" value={password} onChange={event=>setPassword(event.target.value)} aria-label="密码" placeholder="••••••" onKeyDown={event=>{if(event.key==='Enter')login(event);}}/></div></form><ErrorNotice message={error} retry={retryAction} onClose={()=>setError('')}/></div>;
   return <div className="app">
-    <header className="topbar"><a className="brand" href="/" aria-label="RafaTodo 首页"><img className="brand-cat" src="/rafa-cat.png" alt=""/>Rafa<span>todo</span><i/></a><div className="top-tools"><button className="archive-view" onClick={openArchive} aria-label="查看归档" title="查看归档"><Archive size={18}/></button><button className={'heatmap-trigger '+(heatmapOpen?'active':'')} onClick={()=>setHeatmapOpen(value=>!value)} aria-label="打开活动热力图" title="活动热力图"><ChartBar size={18}/></button></div><Heatmap items={items} open={heatmapOpen} onClose={()=>setHeatmapOpen(false)} onLoopHistory={setLoopHistory}/><ArchiveModal open={archiveOpen} items={archived} onClose={()=>setArchiveOpen(false)} onLoopHistory={setLoopHistory}/></header>
+    <header className="topbar"><a className="brand" href="/" aria-label="RafaTodo 首页"><img className="brand-cat" src="/rafa-cat.png" alt=""/>Rafa<span>todo</span><i/></a><div className="top-tools"><button className="archive-view" onClick={openArchive} aria-label="查看归档" title="查看归档"><Archive size={18}/></button><button className={'heatmap-trigger '+(heatmapOpen?'active':'')} onClick={()=>setHeatmapOpen(value=>!value)} aria-label="打开活动热力图" title="活动热力图"><ChartBar size={18}/></button><button className="cheatsheet-trigger" onClick={()=>{setHeatmapOpen(false);setCheatSheetOpen(true);}} aria-label="打开语法速查表" aria-haspopup="dialog" aria-expanded={cheatSheetOpen} title="CheatSheet · 语法速查"><BookOpen size={18}/></button></div><Heatmap items={items} open={heatmapOpen} onClose={()=>setHeatmapOpen(false)} onLoopHistory={setLoopHistory}/><ArchiveModal open={archiveOpen} items={archived} onClose={()=>setArchiveOpen(false)} onLoopHistory={setLoopHistory}/></header>
     <ErrorNotice message={error} retry={retryAction} onClose={()=>setError('')}/>
+    {cheatSheetOpen&&<CheatSheetDialog onClose={()=>setCheatSheetOpen(false)}/>}
     <div className="workspace">
       <main ref={board} className="board drawer-board" aria-label="分类抽屉">
         {domains.map(columnSection)}

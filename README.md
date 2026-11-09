@@ -14,6 +14,8 @@ DAILY 是一组每天重复的日常事项，内容严格按输入原文保存�
 
 需要 Node.js 24。
 
+右上角的书本按钮打开 CheatSheet 语法速查表，按类型、标签、日期字段、循环、关联、排版和快捷键列出全部语法及一句话说明；可按 Esc 或点击叉号关闭，查看时不提交未完成的编辑。
+
 ```sh
 npm install
 INITIAL_PASSWORD='你的密码' node scripts/set-password.mjs

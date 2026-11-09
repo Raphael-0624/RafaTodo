@@ -6,8 +6,15 @@ import {transformWithOxc} from 'vite';
 import {domains,treeRows,workPaneMap,domainPaneMap,moveEntries,nextPosition,normalizeEntryLayout} from '../src/lib/entries.js';
 import {defaultLayout,normalizeLayout,cycleColumns,visiblePanes} from '../src/lib/layout.js';
 import {selectedSubtrees,batchMoveEntries,dropPlacement,pastedLines} from '../src/lib/interactions.js';
+import {syntaxSections} from '../src/lib/cheatsheet.js';
 
 const source=readFileSync(new URL('../src/main.jsx',import.meta.url),'utf8');
+const syntaxRows=syntaxSections.flatMap(section=>section.rows);
+assert.equal(new Set(syntaxRows.map(([syntax])=>syntax)).size,syntaxRows.length,'Syntax examples are unique');
+assert.ok(syntaxRows.every(([syntax,description])=>syntax&&description&&!description.includes('\n')),'Every syntax has a one-line explanation');
+for(const token of ['[ ]','[x]','[X]','[-]','##','---','> ','- 普通','%','@',' #','!重要','!!紧急','~doing','~waiting','due:','plan:','follow:','stage:','::','!loop-day','!loop-week','!resist','sig:','icon:','tone:','color:','[[','after:[[','**','*斜体*','~~','==','`','[名称]','https://','![说明]']){
+  assert.ok(syntaxRows.some(([syntax])=>syntax.includes(token)),'CheatSheet covers '+token);
+}
 for(const name of ['sketch-rule','sketch-divider']){
   const svg=readFileSync(new URL('../public/'+name+'.svg',import.meta.url),'utf8');
   assert.equal((svg.match(/<path\b/g)||[]).length,1,'Separators have one curved stroke without a shadow line');

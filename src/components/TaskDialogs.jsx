@@ -1,6 +1,6 @@
 import React,{useEffect,useRef,useState} from 'react';
 
-export function TaskDialog({title,onClose,onAfterClose,busy=false,children}){
+export function TaskDialog({title,onClose,onAfterClose,busy=false,className='',children}){
   const dialog=useRef(null),titleId=React.useId();
   useEffect(()=>{
     const node=dialog.current;
@@ -12,7 +12,7 @@ export function TaskDialog({title,onClose,onAfterClose,busy=false,children}){
       else if(returnFocus instanceof HTMLElement&&returnFocus.isConnected)returnFocus.focus();
     };
   },[]);
-  return <dialog className="task-dialog" ref={dialog} aria-labelledby={titleId} onCancel={event=>{event.preventDefault();if(!busy)onClose();}} onClick={event=>event.stopPropagation()}>
+  return <dialog className={'task-dialog '+className} ref={dialog} aria-labelledby={titleId} onCancel={event=>{event.preventDefault();if(!busy)onClose();}} onClick={event=>event.stopPropagation()}>
     <header className="task-dialog-head"><h2 id={titleId}>{title}</h2><button type="button" aria-label="关闭" disabled={busy} onClick={onClose}>×</button></header>
     {children}
   </dialog>;

@@ -4,6 +4,7 @@ import {existsSync,mkdtempSync,rmSync,writeFileSync} from 'node:fs';
 import {createServer} from 'node:net';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
+import {syntaxSections} from '../src/lib/cheatsheet.js';
 
 const chrome=process.env.CHROME_BIN||['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome','/usr/bin/google-chrome','/usr/bin/chromium'].find(existsSync);
 assert.ok(chrome,'Set CHROME_BIN to a Chrome/Chromium executable.');
@@ -28,7 +29,9 @@ async function send(method,params={}){
   });
 }
 async function evaluate(expression){
-  const result=await send('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true});
+  let result;
+  try{result=await send('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true});}
+  catch(error){throw new Error(error.message+' while evaluating '+expression.slice(0,240),{cause:error});}
   if(result.exceptionDetails)throw new Error(result.exceptionDetails.exception?.description||result.exceptionDetails.text);
   return result.result.value;
 }
@@ -62,7 +65,8 @@ try{
   assert.equal(setup.status,0,setup.stderr);
   app=spawn(process.execPath,['server.js'],{env:{...process.env,DATA_DIR:dir,PORT:String(port)},stdio:'ignore'});
   await waitFor(()=>fetch(origin+'/api/auth/status').then(response=>response.ok),'test server');
-  browser=spawn(chrome,['--headless=new','--no-first-run','--no-default-browser-check','--disable-gpu','--remote-debugging-port='+debugPort,'--user-data-dir='+path.join(dir,'chrome'),'about:blank'],{stdio:'ignore'});
+  // Native dialogs can occlude headless macOS windows and stall animation frames.
+  browser=spawn(chrome,['--headless=new','--no-first-run','--no-default-browser-check','--disable-gpu','--disable-background-timer-throttling','--disable-renderer-backgrounding','--disable-backgrounding-occluded-windows','--remote-debugging-port='+debugPort,'--user-data-dir='+path.join(dir,'chrome'),'about:blank'],{stdio:'ignore'});
   const targets=await waitFor(()=>fetch('http://127.0.0.1:'+debugPort+'/json').then(response=>response.json()),'isolated Chrome');
   ws=new WebSocket(targets.find(target=>target.type==='page').webSocketDebuggerUrl);
   await new Promise((resolve,reject)=>{ws.onopen=resolve;ws.onerror=reject;});
@@ -72,6 +76,7 @@ try{
     if(message.method==='Runtime.exceptionThrown')errors.push(message.params.exceptionDetails.exception?.description||message.params.exceptionDetails.text);
   };
   await send('Page.enable');await send('Runtime.enable');
+  await send('Emulation.setFocusEmulationEnabled',{enabled:true});
   await send('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false});
   await send('Page.navigate',{url:origin});
   await until('!!document.querySelector("#password")','login screen');
@@ -108,6 +113,37 @@ try{
   assert.equal(await evaluate(`[...document.querySelectorAll('.app>.topbar,.drawer .column-head,.drawer .work-col')].every(node=>{
     const style=getComputedStyle(node);return style.borderBottomWidth==='0px'&&style.borderRightWidth==='0px';
   })`),true,'Sketch separators do not have an underlying straight CSS border');
+  assert.equal(await evaluate(`[...document.querySelectorAll('.drawer')].every(node=>getComputedStyle(node,'::after').content==='none')`),true,'Drawer surfaces have no outer right separator');
+  assert.ok(await evaluate(`getComputedStyle(document.querySelector('.drawer.is-open .work-col:not(:last-child)'),'::after').backgroundImage.includes('sketch-divider.svg')`),'Internal lane separators remain visible');
+  await evaluate(`document.querySelector('.cheatsheet-trigger').focus()`);
+  await click('.cheatsheet-trigger');
+  await until('!!document.querySelector(".cheatsheet-dialog[open]")','CheatSheet opens');
+  assert.equal(await evaluate(`document.querySelectorAll('.cheatsheet-table th[scope="row"]').length`),syntaxSections.reduce((sum,section)=>sum+section.rows.length,0),'All syntax examples are visible as plain code');
+  assert.equal(await evaluate(`document.querySelectorAll('.cheatsheet-table img,.cheatsheet-table a').length`),0,'Example syntax never loads external images or opens links');
+  await screenshot('cheatsheet-desktop');
+  await send('Input.dispatchKeyEvent',{type:'keyDown',key:'Tab',code:'Tab'});
+  await send('Input.dispatchKeyEvent',{type:'keyUp',key:'Tab',code:'Tab'});
+  assert.ok(await evaluate(`!!document.activeElement.closest('.cheatsheet-dialog')`),'Keyboard focus stays inside the guide');
+  await send('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27,nativeVirtualKeyCode:27});
+  await send('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27,nativeVirtualKeyCode:27});
+  await until('!document.querySelector(".cheatsheet-dialog")','Escape closes CheatSheet');
+  assert.ok(await evaluate(`document.activeElement.matches('.cheatsheet-trigger')`),'Guide returns focus to the trigger');
+
+  await click(row(ids.child)+' .entry-body');
+  await until('!!document.querySelector(".write-row textarea")','Edit before opening guide');
+  await evaluate(`document.querySelector('.write-row textarea').select()`);
+  await send('Input.insertText',{text:'Unsaved while reading CheatSheet'});
+  const guidePoint=await evaluate(`(()=>{const r=document.querySelector('.cheatsheet-trigger').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);
+  await send('Input.dispatchMouseEvent',{type:'mousePressed',...guidePoint,button:'left',clickCount:1});
+  await send('Input.dispatchMouseEvent',{type:'mouseReleased',...guidePoint,button:'left',clickCount:1});
+  await until('!!document.querySelector(".cheatsheet-dialog[open]")','Guide opens while editing');
+  assert.equal(await evaluate(`document.querySelector('.write-row textarea')?.value`),'Unsaved while reading CheatSheet','Reading help preserves the editor');
+  assert.equal(await evaluate(`fetch('/api/entries').then(response=>response.json()).then(items=>items.find(item=>item.id===${JSON.stringify(ids.child)}).title)`),'Child task','Opening help does not submit an unfinished edit');
+  await click('.cheatsheet-dialog [aria-label="关闭"]');
+  await evaluate(`document.querySelector('.write-row textarea').focus()`);
+  await send('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape'});
+  await send('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape'});
+  await until('!document.querySelector(".write-row")','Cancel unsaved guide test');
   await until(`!!document.querySelector(${JSON.stringify(row(ids.child))})`,'child visible');
   assert.equal(await evaluate('!!document.querySelector(".work-pinned-list")'),false,'No empty pinned area');
   await click(row(ids.child)+' .row-menu-trigger');
@@ -285,6 +321,13 @@ try{
   await send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
   await send('Emulation.setTouchEmulationEnabled',{enabled:true});
   checkGeometry(await geometry());
+  await click('.cheatsheet-trigger');await until('!!document.querySelector(".cheatsheet-dialog[open]")','Mobile CheatSheet');
+  assert.ok(await evaluate(`(()=>{
+    const dialog=document.querySelector('.cheatsheet-dialog'),body=dialog.querySelector('.cheatsheet-body'),rect=dialog.getBoundingClientRect();
+    return rect.left>=0&&rect.right<=innerWidth&&rect.top>=0&&rect.bottom<=innerHeight&&body.scrollHeight>body.clientHeight&&body.scrollWidth<=body.clientWidth;
+  })()`),'Mobile guide stays in the viewport, wraps syntax and scrolls vertically');
+  await evaluate(`document.querySelector('.cheatsheet-body').scrollTop=10000`);
+  await screenshot('cheatsheet-mobile');await click('.cheatsheet-dialog [aria-label="关闭"]');
   await inboxValue('Mobile wrapped content '.repeat(30));
   await until('document.querySelector("#work-inbox").clientHeight>60','Mobile INBOX wraps');
   checkGeometry(await geometry());await screenshot('mobile-layout');
@@ -511,7 +554,7 @@ try{
   await send('Emulation.setEmulatedMedia',{features:[]});
   await openDomain('Work');
   assert.deepEqual(errors,[],'Browser runtime errors');
-  console.log('PASS: desktop/mobile drawers, independent columns, non-mutating folds, save failure, hover drag, scroll/reload, keyboard/reduced motion, image preview, focus/ZEN and resist check-ins');
+  console.log('PASS: syntax guide, desktop/mobile drawers, independent columns, non-mutating folds, save failure, hover drag, scroll/reload, keyboard/reduced motion, image preview, focus/ZEN and resist check-ins');
 }catch(error){
   try{await screenshot('browser-failure');}catch{}
   throw error;

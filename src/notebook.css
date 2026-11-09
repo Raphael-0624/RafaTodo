@@ -7,9 +7,6 @@
 .board.drawer-board{--rail-size:48px;--drawer-width:calc(100vw - 144px);display:flex;overflow:hidden;isolation:isolate;gap:0}
 .workspace .drawer{flex:0 0 var(--rail-size);padding:0;min-width:0;position:relative;border:0;overflow:hidden;transition:flex-grow 460ms var(--drawer-ease);background:var(--paper)}
 .workspace .drawer.is-open{flex-grow:1}
-.drawer::after{content:'';position:absolute;z-index:5;right:0;top:12px;bottom:12px;width:6px;background:url('/sketch-divider.svg') center/6px 100% no-repeat;pointer-events:none}
-.drawer:last-child::after{display:none}
-.drawer:not(.is-open)::after{display:none}
 .drawer[data-domain="Work"]{--tab:#eaf0e1;--tab-ink:#536c45}
 .drawer[data-domain="Daily"]{--tab:#f5ecd4;--tab-ink:#947542}
 .drawer[data-domain="Life"]{--tab:#e5eef0;--tab-ink:#4f7b80}
@@ -59,6 +56,20 @@
 .inbox-entry::before{background:none;border:2px solid transparent;border-image:url('/sketch-frame.svg') 8 stretch}
 .inbox-entry:focus-within{border-color:transparent;outline:2px solid #839b6f;outline-offset:1px}
 .task-dialog{background:#fffdf6;border-radius:8px 13px 7px 11px/11px 7px 13px 8px}
+.cheatsheet-trigger{width:32px;height:32px;display:grid;place-items:center;color:#829079;border-radius:4px}
+.cheatsheet-trigger:hover,.cheatsheet-trigger[aria-expanded="true"]{color:#438865;background:#eff3ed}
+.cheatsheet-dialog{width:min(780px,calc(100vw - 28px))}
+.cheatsheet-body{padding-top:8px;overscroll-behavior:contain}
+.cheatsheet-note{color:#7c886f;font-size:12px}
+.cheatsheet-table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:12px;line-height:1.7}
+.cheatsheet-table th,.cheatsheet-table td{padding:9px 10px;text-align:left;vertical-align:top;overflow-wrap:anywhere}
+.cheatsheet-table thead th{color:#7d8b71;font-size:11px;font-weight:500;border-bottom:1px solid #dce3d2}
+.cheatsheet-table thead th:first-child{width:46%}
+.cheatsheet-table tbody th[scope="row"]{font-weight:400}
+.cheatsheet-table tbody td{color:#66715c}
+.cheatsheet-table tbody tr:not(.cheatsheet-section){border-bottom:1px solid #e8e9de}
+.cheatsheet-table .cheatsheet-section th{padding-top:22px;padding-bottom:7px;color:#536c45;font-weight:650}
+.cheatsheet-table code{font-family:"SFMono-Regular",Consolas,"Liberation Mono",monospace;font-size:11px;white-space:pre-wrap;background:#f0f1e5;padding:2px 4px;border-radius:2px;box-decoration-break:clone;-webkit-box-decoration-break:clone}
 .drawer .add-row>button{color:#8b9a7c}.drawer .entry-read:hover{background:#eaf0df88}
 @media(max-width:720px){
   .board.drawer-board{--rail-size:32px}
@@ -71,5 +82,7 @@
   .drawer .work-scroll{margin:0 -12px;padding:0;overflow-x:auto}.drawer .work-col-scroll{padding:0 12px 18px}
   .drawer .pinned-list,.drawer .work-pinned-list{margin:0 0 12px;padding:6px 8px}
   .drawer .column-watermark{font-size:70px}
+  .cheatsheet-table th,.cheatsheet-table td{padding:8px 5px}.cheatsheet-body{padding:8px 12px 16px}
 }
+@media(any-pointer:coarse){.top-tools>.cheatsheet-trigger{width:44px;height:44px}}
 @media(prefers-reduced-motion:reduce){.workspace .drawer,.drawer-surface{transition:none}.checkbox.checked svg{animation:none}}
